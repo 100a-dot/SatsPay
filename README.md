@@ -1,6 +1,6 @@
 # ⚡ RemesasSV — Fullstack Instant USD Remittances to El Salvador
 
-**RemesasSV** is a fullstack web platform that enables anyone in the United States (or worldwide) to send USD remittances to **El Salvador** in seconds with near-zero fees, powered behind the scenes by **Bitcoin and the Lightning Network**.
+**RemesasSV** is a fullstack web platform that enables anyone in the United States (or worldwide) to send USD remittances to **El Salvador** in seconds with near-zero fees, powered behind the scenes by **Wompi El Salvador (Banco Agrícola)**, **Blink Stablesats (USD)**, and **Bitcoin over the Lightning Network**.
 
 ---
 
@@ -42,9 +42,10 @@ sequenceDiagram
     App-->>Recipient: Official USD Deposit Receipt
 ```
 
-1. **Zero Volatility with Stablesats (USD):** Funds waiting to be claimed are held in a **Stablesats (synthetic USD)** wallet inside **Blink**, maintaining a 1:1 peg to the US Dollar until the exact moment the recipient claims the transfer.
-2. **Real USD Payouts in Chivo Wallet:** The recipient in El Salvador generates a Lightning invoice inside **Chivo Wallet** configured to **receive in USD**. When our backend pays that invoice over the Lightning Network, Chivo Wallet automatically converts the incoming satoshis into **US Dollars** in the recipient's account.
-3. **Two-Factor Claim Security (Claim Code + 4-Digit PIN):** To claim a remittance, the recipient must provide both the unique **Claim Code (`SV-XXXX-XXX`)** and the secret **4-digit PIN** chosen by the sender. After 5 failed PIN attempts, the remittance is automatically locked against brute-force attacks.
+1. **Real Card Checkout via Wompi El Salvador (Banco Agrícola):** Senders pay in USD using any Visa or Mastercard debit/credit card through **Wompi El Salvador's OAuth2 API** (`https://api.wompi.sv/EnlacePago`), with live server-side payment verification and automatic polling.
+2. **Zero Volatility with Stablesats (USD):** Funds waiting to be claimed are held in a **Stablesats (synthetic USD)** wallet inside **Blink**, maintaining a 1:1 peg to the US Dollar until the exact moment the recipient claims the transfer.
+3. **Real USD Payouts in Chivo Wallet:** The recipient in El Salvador generates a Lightning invoice inside **Chivo Wallet** configured to **convert to USD**. When our backend pays that invoice over the Lightning Network, Chivo Wallet automatically credits **US Dollars** into the recipient's account.
+4. **Two-Factor Claim Security (Claim Code + 4-Digit PIN):** To claim a remittance, the recipient must provide both the unique **Claim Code (`SV-XXXX-XXX`)** and the secret **4-digit PIN** chosen by the sender. After 5 failed PIN attempts, the remittance is automatically locked against brute-force attacks.
 
 ---
 
@@ -53,16 +54,18 @@ sequenceDiagram
 ### 👥 Public Customer Platform (`/` & `/reclamar`)
 * **Consumer-Grade UI:** Clean, trustworthy interface with zero crypto jargon or internal business details exposed.
 * **Real-Time Remittance Calculator:** Transparent breakdown of the amount sent, applicable fee, and exact net USD amount the recipient will receive in El Salvador.
+* **Live Wompi Card Checkout & Auto-Detection:** Opens the official `lk.wompi.sv` payment gateway while automatically polling the Wompi API in the background so the receipt and PIN appear immediately upon card approval.
 * **Digital Receipt & One-Click WhatsApp Share:** Generates a printable digital receipt and a pre-formatted WhatsApp message containing the claim link, Claim Code, and 4-digit PIN.
 * **Smart Chivo Wallet Invoice Validator:** Automatically inspects pasted invoices (`bolt11`) to verify they are valid Mainnet Lightning invoices (`lnbc...`), warns users if they accidentally paste an On-Chain address (`bc1...`), checks expiration timestamps, and verifies that the invoice amount matches the remittance payout.
 
 ### 🔐 Private Admin & Treasury Dashboard (`/admin`)
 * **Password-Protected Access:** Secured via an `httpOnly` session cookie.
-* **Live Blink Treasury Monitoring:** Real-time balances for both the **Stablesats (USD)** wallet (in USD/cents) and the **Bitcoin (BTC)** wallet (in satoshis), plus live BTC/USD reference rates.
+* **Wompi El Salvador Gateway Management:** Configure `WOMPI_APP_ID` and `WOMPI_API_SECRET` directly from the UI with live OAuth2 connection diagnostics (`id.wompi.sv/connect/token`).
+* **Live Blink Treasury Monitoring:** Real-time balances for both the **Stablesats (USD)** wallet (in USD/cents) and the **Bitcoin (BTC)** wallet (in satoshis), plus live BTC/USD reference rates and 1-click internal `BTC` $\rightarrow$ `Stablesats (USD)` conversion.
 * **Hybrid Environment Switch (`MOCK` vs. `PRODUCTION`):** Toggle between the `$0` local simulator and live Mainnet production payouts with a single click.
-* **Public Fee Control:** Switch between **$0.00 Fee (1:1 Promo/Test Mode)** (ideal for live micro-amount testing starting at `$0.10 USD`) and **Commercial Pricing (`1.5% + $0.50 USD`)**.
-* **Remittance Audit Table & PIN Unlock:** Full history of all remittances, including claim status, 4-digit PINs, error logs, and a one-click button to unlock orders locked by failed PIN attempts.
-* **Stablesats Liquidity Top-Up:** Built-in generator for USD-denominated Lightning invoices (`lnUsdInvoiceCreate`) to replenish the Blink Stablesats treasury.
+* **Public Fee Control:** Switch between **$0.00 Fee (1:1 Promo/Test Mode)** and **Commercial Pricing (`1.5% + $0.50 USD`)**.
+* **Remittance Audit Table & PIN Unlock:** Full history of all remittances, including Wompi transaction IDs, claim status, 4-digit PINs, error logs, and a one-click button to unlock orders locked by failed PIN attempts.
+* **Zero-Fee Stablesats Liquidity Top-Up:** Built-in generator for USD-denominated Lightning invoices (`lnUsdInvoiceCreate`) to replenish the Blink Stablesats treasury directly from **Chivo Wallet** with `$0.00` fees.
 
 ---
 
@@ -70,6 +73,7 @@ sequenceDiagram
 
 * **Framework:** [Next.js 15](https://nextjs.org/) (App Router, Route Handlers) with **TypeScript**.
 * **Styling & UI:** [Tailwind CSS](https://tailwindcss.com/) + [Lucide React](https://lucide.dev/) icons.
+* **Card Payment Gateway:** [Wompi El Salvador API (Banco Agrícola)](https://wompi.sv/) (`POST /connect/token`, `POST /EnlacePago`, `GET /EnlacePago/{id}`).
 * **Bitcoin & Lightning Infrastructure:** [Blink GraphQL API](https://dev.blink.sv/) (`lnInvoicePaymentSend`, `lnUsdInvoiceCreate`, `lnInvoiceFeeProbe`).
 * **BOLT11 Invoice Decoding:** [`light-bolt11-decoder`](https://www.npmjs.com/package/light-bolt11-decoder).
 * **Persistence:** Zero-config local JSON transactional store (`data/remittances.json`) for instant local startup + [`prisma/schema.prisma`](./prisma/schema.prisma) schema ready for PostgreSQL / Supabase deployment.
@@ -80,7 +84,9 @@ sequenceDiagram
 
 ### 1. Prerequisites
 * **Node.js** `v20+` (tested on `v24.16.0`) and **npm**.
-* *(Optional for Production Mode)* A **[Blink](https://blink.sv/)** account and an **API Key** generated at [dashboard.blink.sv](https://dashboard.blink.sv/) with `READ`, `RECEIVE`, and `WRITE` scopes enabled.
+* *(For Live Production Mode)*:
+  * A **[Blink](https://blink.sv/)** account and an **API Key** generated at [dashboard.blink.sv](https://dashboard.blink.sv/) with `READ`, `RECEIVE`, and `WRITE` scopes enabled.
+  * A **[Wompi El Salvador](https://wompi.sv/)** account with an active business/application (`WOMPI_APP_ID` and `WOMPI_API_SECRET`) to process live Visa/Mastercard payments.
 
 ### 2. Environment Variables
 Copy `.env.example` to `.env` (if not already present):
@@ -129,13 +135,13 @@ Open your browser at **[http://localhost:3000](http://localhost:3000)**.
 
 ## 🧪 Quick End-to-End Testing Guide
 
-1. **Configure Your Treasury in `/admin`:**
+1. **Configure Your Treasury & Gateway in `/admin`:**
    * Go to **[http://localhost:3000/admin](http://localhost:3000/admin)** and log in using the default password: `admin1234`.
-   * Select **Mock Mode ($0)** for simulated testing, or paste your `BLINK_API_KEY` and enable **Production Mode (Blink Mainnet)** to send real funds to Chivo Wallet.
+   * Paste your `BLINK_API_KEY` (Section 1) and your `WOMPI_APP_ID` + `WOMPI_API_SECRET` (Section 2A) to enable live card payments and Mainnet Lightning payouts.
 2. **Send a Remittance as a Customer (`/`):**
    * Go to **[http://localhost:3000](http://localhost:3000)**.
-   * Enter an amount (you can test in Production with micro-amounts like **`0.25`** or **`0.50`** USD), sender name, recipient name, and a **4-digit Security PIN**.
-   * Click **Send** to generate your **Claim Code (`SV-XXXX-XXX`)** and digital receipt.
+   * Enter an amount (e.g., **`0.50`** or **`1.00`** USD), sender name, recipient name, and a **4-digit Security PIN**.
+   * Click **Continue to Card Payment** to open the official **Wompi El Salvador (`lk.wompi.sv`)** payment link. Once your card is approved, the platform automatically detects the payment via Wompi's API and displays your **Claim Code (`SV-XXXX-XXX`)** and digital receipt.
 3. **Claim the Remittance in Chivo Wallet (`/reclamar`):**
    * Open the claim link or visit **[http://localhost:3000/reclamar](http://localhost:3000/reclamar)** and enter the Claim Code and **4-digit PIN**.
    * On your phone, open **Chivo Wallet**, enter your account PIN, and tap **Recibir** (*Receive*).
@@ -156,10 +162,12 @@ Open your browser at **[http://localhost:3000](http://localhost:3000)**.
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── admin/auth/route.ts       # Admin authentication via httpOnly cookie
-│   │   │   ├── blink/status/route.ts     # Private Blink treasury & admin management API
+│   │   │   ├── blink/status/route.ts     # Private Blink treasury, Wompi status & admin API
+│   │   │   ├── checkout/verify/route.ts  # Server-side Wompi / Stripe payment verification
 │   │   │   ├── invoice/inspect/route.ts  # Public BOLT11 invoice decoder for live preview
 │   │   │   └── remittances/              # REST endpoints for remittance creation, PIN check & payout
 │   │   ├── admin/page.tsx                # Private Admin & Treasury Dashboard (/admin)
+│   │   ├── checkout/[code]/page.tsx      # Integrated fallback card checkout screen (/checkout/[code])
 │   │   ├── enviar/page.tsx               # Dedicated Send Remittance page (/enviar)
 │   │   ├── reclamar/
 │   │   │   ├── page.tsx                  # Public Claim Code lookup (/reclamar)
@@ -167,11 +175,12 @@ Open your browser at **[http://localhost:3000](http://localhost:3000)**.
 │   │   └── page.tsx                      # Public customer landing & remittance calculator (/)
 │   ├── components/
 │   │   ├── Navbar.tsx                    # Customer-facing navigation bar
-│   │   └── SendRemittanceSection.tsx     # Calculator, sender form, digital receipt & WhatsApp share
+│   │   └── SendRemittanceSection.tsx     # Calculator, Wompi live polling, receipt & WhatsApp share
 │   └── lib/
 │       ├── admin-auth.ts                 # Server-side admin session verification
 │       ├── blink.ts                      # Blink GraphQL client (Stablesats USD & BTC)
 │       ├── bolt11.ts                     # BOLT11 Lightning invoice validator (lnbc...)
+│       ├── exchange.ts                   # Wompi El Salvador OAuth2 API & payment link engine
 │       └── store.ts                      # Remittance state engine & brute-force PIN lock
 ├── ARQUITECTURA_Y_ANALISIS.md            # Technical architecture & exchange analysis document
 └── README.md                             # Main project documentation
