@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  convertBlinkBtcWalletToStablesatsUsd,
   getBlinkAccountStatus,
   payLightningInvoiceFromStablesats,
   probeLightningFeeFromUsd,
@@ -164,11 +165,48 @@ export async function POST(
       routingFeeUsdCents = 0;
     }
 
-    const paymentResult = await payLightningInvoiceFromStablesats({
+    let paymentResult = await payLightningInvoiceFromStablesats({
       usdWalletId: blinkStatus.usdWallet.id,
       paymentRequest: bolt11Invoice.trim(),
       memo: `Remesa ${remittance.claimCode} - $${expectedUsd.toFixed(2)} USD`,
     });
+
+    // Si la billetera Stablesats USD tiene exactamente $0.50 (50 cents) y Blink pide 52-53 cents
+    // por el diferencial de tipo de cambio/fee de ruta, intentamos cubrir esos centavos con la billetera BTC
+    const firstErr = paymentResult.errors.map((e) => e.message).join("; ");
+    if (
+      paymentResult.status === "FAILURE" &&
+      firstErr.toLowerCase().includes("exceeds balance") &&
+      blinkStatus.btcWallet?.id &&
+      (blinkStatus.btcWallet.balance ?? 0) > 50
+    ) {
+      try {
+        await convertBlinkBtcWalletToStablesatsUsd({
+          btcWalletId: blinkStatus.btcWallet.id,
+          usdWalletId: blinkStatus.usdWallet.id,
+          amountUsdCents: 10,
+          memo: `Margen de tipo de cambio remesa ${remittance.claimCode}`,
+        });
+        paymentResult = await payLightningInvoiceFromStablesats({
+          usdWalletId: blinkStatus.usdWallet.id,
+          paymentRequest: bolt11Invoice.trim(),
+          memo: `Remesa ${remittance.claimCode} - $${expectedUsd.toFixed(2)} USD`,
+        });
+      } catch {
+        // Si no alcanzó para convertir a USD, intentar pagar directo desde la billetera BTC
+      }
+
+      if (
+        paymentResult.status === "FAILURE" &&
+        (blinkStatus.btcWallet.balance ?? 0) >= (decoded.satoshis ?? 0)
+      ) {
+        paymentResult = await payLightningInvoiceFromStablesats({
+          usdWalletId: blinkStatus.btcWallet.id,
+          paymentRequest: bolt11Invoice.trim(),
+          memo: `Remesa ${remittance.claimCode} - $${expectedUsd.toFixed(2)} USD`,
+        });
+      }
+    }
 
     if (
       paymentResult.status === "SUCCESS" ||
@@ -201,9 +239,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "No se pudo enviar el pago a esa factura de Chivo Wallet. Verifica que no haya expirado y genera una nueva factura por $" +
-            expectedUsd.toFixed(2) +
-            " USD.",
+            "Ha ocurrido un error inesperado al procesar tu retiro. Por favor intenta nuevamente en unos momentos.",
         },
         { status: 400 }
       );

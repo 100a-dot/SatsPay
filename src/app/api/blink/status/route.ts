@@ -1,13 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import {
+  type CheckoutProviderMode,
+  convertBlinkBtcWalletToStablesatsUsd,
   createStablesatsUsdInvoice,
+  type FundingSourceMode,
   getBlinkAccountStatus,
-  PaymentMode,
+  getUsCheckoutConfig,
+  type PaymentMode,
   probeLightningFeeFromUsd,
   saveRuntimeBlinkConfig,
 } from "@/lib/blink";
 import { inspectChivoInvoice } from "@/lib/bolt11";
+import {
+  checkStrikeAccountStatus,
+  checkWompiAccountStatus,
+  convertUsdToBtcAndFundBlinkStablesats,
+} from "@/lib/exchange";
 import { unlockRemittanceByClaimCode } from "@/lib/store";
 
 export async function GET() {
@@ -16,7 +25,24 @@ export async function GET() {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
   const status = await getBlinkAccountStatus();
-  return NextResponse.json(status);
+  const checkoutCfg = getUsCheckoutConfig();
+  const [wompiStatus, strikeStatus] = await Promise.all([
+    checkoutCfg.wompiAppId && checkoutCfg.wompiApiSecret
+      ? checkWompiAccountStatus({
+          wompiAppId: checkoutCfg.wompiAppId,
+          wompiApiSecret: checkoutCfg.wompiApiSecret,
+        })
+      : Promise.resolve({ connected: false }),
+    checkoutCfg.strikeApiKey
+      ? checkStrikeAccountStatus(checkoutCfg.strikeApiKey)
+      : Promise.resolve({ connected: false }),
+  ]);
+
+  return NextResponse.json({
+    ...status,
+    wompiStatus,
+    strikeStatus,
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -39,6 +65,12 @@ export async function POST(req: NextRequest) {
       claimCode,
       zeroFeePublicMode,
       newAdminPassword,
+      usCheckoutMode,
+      wompiAppId,
+      wompiApiSecret,
+      stripeSecretKey,
+      fundingSourceMode,
+      strikeApiKey,
     } = body as {
       action:
         | "check_status"
@@ -46,7 +78,10 @@ export async function POST(req: NextRequest) {
         | "inspect_invoice"
         | "unlock_remittance"
         | "set_fee_mode"
-        | "change_admin_password";
+        | "change_admin_password"
+        | "save_exchange_config"
+        | "test_strike_to_blink_bridge"
+        | "convert_blink_btc_to_usd";
       apiKey?: string;
       mode?: PaymentMode;
       usdWalletId?: string;
@@ -57,6 +92,12 @@ export async function POST(req: NextRequest) {
       claimCode?: string;
       zeroFeePublicMode?: boolean;
       newAdminPassword?: string;
+      usCheckoutMode?: CheckoutProviderMode;
+      wompiAppId?: string;
+      wompiApiSecret?: string;
+      stripeSecretKey?: string;
+      fundingSourceMode?: FundingSourceMode;
+      strikeApiKey?: string;
     };
 
     if (action === "check_status") {
@@ -65,7 +106,93 @@ export async function POST(req: NextRequest) {
         overrideApiKey: apiKey?.trim() || undefined,
         persistIfValid: true,
       });
-      return NextResponse.json(status);
+      const checkoutCfg = getUsCheckoutConfig();
+      const [wompiStatus, strikeStatus] = await Promise.all([
+        checkoutCfg.wompiAppId && checkoutCfg.wompiApiSecret
+          ? checkWompiAccountStatus({
+              wompiAppId: checkoutCfg.wompiAppId,
+              wompiApiSecret: checkoutCfg.wompiApiSecret,
+            })
+          : Promise.resolve({ connected: false }),
+        checkoutCfg.strikeApiKey
+          ? checkStrikeAccountStatus(checkoutCfg.strikeApiKey)
+          : Promise.resolve({ connected: false }),
+      ]);
+      return NextResponse.json({ ...status, wompiStatus, strikeStatus });
+    }
+
+    if (action === "save_exchange_config") {
+      const configPatch: Parameters<typeof saveRuntimeBlinkConfig>[0] = {};
+      if (usCheckoutMode) configPatch.usCheckoutMode = usCheckoutMode;
+      if (wompiAppId !== undefined && wompiAppId.trim() !== "") {
+        configPatch.wompiAppId = wompiAppId.trim();
+      }
+      if (wompiApiSecret !== undefined && wompiApiSecret.trim() !== "") {
+        configPatch.wompiApiSecret = wompiApiSecret.trim();
+      }
+      if (stripeSecretKey !== undefined && stripeSecretKey.trim() !== "") {
+        configPatch.stripeSecretKey = stripeSecretKey.trim();
+      }
+      if (fundingSourceMode) configPatch.fundingSourceMode = fundingSourceMode;
+      if (strikeApiKey !== undefined && strikeApiKey.trim() !== "") {
+        configPatch.strikeApiKey = strikeApiKey.trim();
+      }
+      saveRuntimeBlinkConfig(configPatch);
+
+      const status = await getBlinkAccountStatus();
+      const checkoutCfg = getUsCheckoutConfig();
+      const [wompiStatus, strikeStatus] = await Promise.all([
+        checkoutCfg.wompiAppId && checkoutCfg.wompiApiSecret
+          ? checkWompiAccountStatus({
+              wompiAppId: checkoutCfg.wompiAppId,
+              wompiApiSecret: checkoutCfg.wompiApiSecret,
+            })
+          : Promise.resolve({ connected: false }),
+        checkoutCfg.strikeApiKey
+          ? checkStrikeAccountStatus(checkoutCfg.strikeApiKey)
+          : Promise.resolve({ connected: false }),
+      ]);
+
+      return NextResponse.json({ ...status, wompiStatus, strikeStatus });
+    }
+
+    if (action === "convert_blink_btc_to_usd") {
+      const status = await getBlinkAccountStatus();
+      if (!status.connected || !status.btcWallet?.id || !status.usdWallet?.id) {
+        return NextResponse.json(
+          { error: "Blink API no conectada o billeteras no encontradas." },
+          { status: 400 }
+        );
+      }
+      const targetCents = Math.max(1, Number(amountCents || 50));
+      const result = await convertBlinkBtcWalletToStablesatsUsd({
+        btcWalletId: status.btcWallet.id,
+        usdWalletId: status.usdWallet.id,
+        amountUsdCents: targetCents,
+      });
+      const updatedStatus = await getBlinkAccountStatus();
+      return NextResponse.json({
+        conversionResult: result,
+        status: updatedStatus,
+      });
+    }
+
+    if (action === "test_strike_to_blink_bridge") {
+      const checkoutCfg = getUsCheckoutConfig();
+      const bridgeResult = await convertUsdToBtcAndFundBlinkStablesats({
+        amountUsdCents: Number(amountCents || 10),
+        remittanceClaimCode: `TEST-${Date.now().toString().slice(-4)}`,
+        strikeApiKey: strikeApiKey?.trim() || checkoutCfg.strikeApiKey,
+      });
+      const status = await getBlinkAccountStatus();
+      const strikeStatus = checkoutCfg.strikeApiKey
+        ? await checkStrikeAccountStatus(checkoutCfg.strikeApiKey)
+        : { connected: false };
+
+      return NextResponse.json({
+        bridgeResult,
+        status: { ...status, strikeStatus },
+      });
     }
 
     if (action === "set_fee_mode") {
@@ -140,7 +267,10 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return NextResponse.json(
       {
-        error: err instanceof Error ? err.message : "Error interno en el endpoint de administración",
+        error:
+          err instanceof Error
+            ? err.message
+            : "Error interno en el endpoint de administración",
       },
       { status: 500 }
     );
