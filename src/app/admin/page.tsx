@@ -9,8 +9,6 @@ import {
   DollarSign,
   Bitcoin,
   RefreshCw,
-  CheckCircle2,
-  AlertTriangle,
   KeyRound,
   FileCheck2,
   ArrowRight,
@@ -21,10 +19,25 @@ import {
   Unlock,
   Sparkles,
   ExternalLink,
+  CreditCard,
+  ArrowRightLeft,
+  Building2,
 } from "lucide-react";
-import type { BlinkAccountStatus, BlinkInvoiceResult, PaymentMode } from "@/lib/blink";
+import type {
+  BlinkAccountStatus,
+  BlinkInvoiceResult,
+  CheckoutProviderMode,
+  FundingSourceMode,
+  PaymentMode,
+} from "@/lib/blink";
 import type { DecodedBolt11Invoice } from "@/lib/bolt11";
+import type { StrikeStatusResult, WompiStatusResult } from "@/lib/exchange";
 import type { RemittanceRecord } from "@/lib/store";
+
+type AdminStatusResponse = BlinkAccountStatus & {
+  wompiStatus?: WompiStatusResult;
+  strikeStatus?: StrikeStatusResult;
+};
 
 export default function AdminDashboardPage() {
   const [checkingAuth, setCheckingAuth] = useState<boolean>(true);
@@ -32,23 +45,36 @@ export default function AdminDashboardPage() {
   const [passwordInput, setPasswordInput] = useState<string>("");
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const [status, setStatus] = useState<BlinkAccountStatus | null>(null);
+  const [status, setStatus] = useState<AdminStatusResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedMode, setSelectedMode] = useState<PaymentMode>("mock");
   const [customApiKey, setCustomApiKey] = useState<string>("");
 
-  // Historial completo de remesas para el administrador
+  const [usCheckoutMode, setUsCheckoutMode] = useState<CheckoutProviderMode>("wompi");
+  const [wompiAppId, setWompiAppId] = useState<string>("");
+  const [wompiApiSecret, setWompiApiSecret] = useState<string>("");
+  const [stripeSecretKey, setStripeSecretKey] = useState<string>("");
+  const [fundingSourceMode, setFundingSourceMode] = useState<FundingSourceMode>(
+    "prefunded_blink"
+  );
+  const [strikeApiKey, setStrikeApiKey] = useState<string>("");
+  const [savingExchangeCfg, setSavingExchangeCfg] = useState<boolean>(false);
+
+  const [convertingBtcToUsd, setConvertingBtcToUsd] = useState<boolean>(false);
+  const [convertAmountUsd, setConvertAmountUsd] = useState<string>("0.50");
+  const [convertFeedback, setConvertFeedback] = useState<string | null>(null);
+
   const [remittances, setRemittances] = useState<RemittanceRecord[]>([]);
 
-  // Generador de facturas Stablesats USD
-  const [invoiceAmountUsd, setInvoiceAmountUsd] = useState<string>("1.00");
-  const [invoiceMemo, setInvoiceMemo] = useState<string>("Recarga Tesorería Stablesats USD");
+  const [invoiceAmountUsd, setInvoiceAmountUsd] = useState<string>("5.00");
+  const [invoiceMemo, setInvoiceMemo] = useState<string>(
+    "Recarga Liquidez Chivo -> Blink Stablesats USD"
+  );
   const [generatedInvoice, setGeneratedInvoice] = useState<BlinkInvoiceResult | null>(null);
   const [creatingInvoice, setCreatingInvoice] = useState<boolean>(false);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Inspector BOLT11
   const [chivoInput, setChivoInput] = useState<string>("");
   const [inspectResult, setInspectResult] = useState<{
     decoded: DecodedBolt11Invoice;
@@ -67,10 +93,12 @@ export default function AdminDashboardPage() {
         setAuthenticated(false);
         return;
       }
-      const statusData: BlinkAccountStatus = await statusRes.json();
+      const statusData: AdminStatusResponse = await statusRes.json();
       const remData = await remRes.json();
       setStatus(statusData);
       setSelectedMode(statusData.mode);
+      if (statusData.usCheckoutMode) setUsCheckoutMode(statusData.usCheckoutMode);
+      if (statusData.fundingSourceMode) setFundingSourceMode(statusData.fundingSourceMode);
       setRemittances(remData.remittances || []);
     } finally {
       setLoading(false);
@@ -129,11 +157,72 @@ export default function AdminDashboardPage() {
           apiKey: apiKeyOverride ?? customApiKey,
         }),
       });
-      const data: BlinkAccountStatus = await res.json();
+      const data: AdminStatusResponse = await res.json();
       setStatus(data);
       setSelectedMode(data.mode);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSaveExchangeConfig(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingExchangeCfg(true);
+    try {
+      const res = await fetch("/api/blink/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save_exchange_config",
+          usCheckoutMode,
+          wompiAppId,
+          wompiApiSecret,
+          stripeSecretKey,
+          fundingSourceMode,
+          strikeApiKey,
+        }),
+      });
+      const data: AdminStatusResponse = await res.json();
+      setStatus(data);
+      setWompiAppId("");
+      setWompiApiSecret("");
+      setStripeSecretKey("");
+      setStrikeApiKey("");
+    } finally {
+      setSavingExchangeCfg(false);
+    }
+  }
+
+  async function handleConvertBlinkBtcToUsd() {
+    setConvertingBtcToUsd(true);
+    setConvertFeedback(null);
+    const amountCents = Math.max(1, Math.round(parseFloat(convertAmountUsd || "0.50") * 100));
+    try {
+      const res = await fetch("/api/blink/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "convert_blink_btc_to_usd",
+          amountCents,
+        }),
+      });
+      const data = await res.json();
+      if (data.status) setStatus(data.status);
+      if (data.conversionResult?.status === "SUCCESS") {
+        setConvertFeedback(
+          `✅ Se convirtieron $${(amountCents / 100).toFixed(2)} USD desde tu billetera BTC hacia Stablesats (USD) con $0.00 de comisión.`
+        );
+      } else {
+        setConvertFeedback(
+          `❌ Error: ${
+            data.error ||
+            data.conversionResult?.errors?.[0]?.message ||
+            "No se pudo convertir BTC a Stablesats USD"
+          }`
+        );
+      }
+    } finally {
+      setConvertingBtcToUsd(false);
     }
   }
 
@@ -146,7 +235,7 @@ export default function AdminDashboardPage() {
         zeroFeePublicMode: zeroFee,
       }),
     });
-    const data: BlinkAccountStatus = await res.json();
+    const data: AdminStatusResponse = await res.json();
     setStatus(data);
   }
 
@@ -246,7 +335,7 @@ export default function AdminDashboardPage() {
               Panel Privado de Administración
             </h1>
             <p className="text-xs text-slate-400">
-              Acceso exclusivo a tesorería Blink Stablesats, API Key y auditoría de remesas.
+              Acceso exclusivo a tesorería Blink Stablesats, Wompi El Salvador y auditoría.
             </p>
           </div>
 
@@ -292,7 +381,6 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950">
-      {/* Header exclusivo de Admin */}
       <header className="border-b border-slate-800 bg-slate-950/90 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -317,7 +405,7 @@ export default function AdminDashboardPage() {
                 )}
               </div>
               <p className="text-xs text-slate-400">
-                Gestión interna de Blink Stablesats USD, API Keys y seguridad de remesas
+                Wompi El Salvador (Tarjeta USD) → Blink Stablesats (USD) → Chivo Wallet (Lightning)
               </p>
             </div>
           </div>
@@ -343,16 +431,15 @@ export default function AdminDashboardPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-        {/* 1. Configuración de Blink API, Stablesats y Tarifa Pública */}
         <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
             <div>
               <h2 className="text-xl font-semibold text-white flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-emerald-400" />
-                1. Motor de Pagos Blink GraphQL API & Tesorería Stablesats
+                1. Billetera Blink GraphQL API (Resguardo en Stablesats USD)
               </h2>
               <p className="text-xs text-slate-400 mt-1">
-                Solo visible para ti como administrador. Aquí controlas el entorno, la API Key y las comisiones al público.
+                Tu fondo de liquidez se resguarda directamente en dólares estables (Stablesats USD) y desde aquí se pagan las facturas de Chivo Wallet.
               </p>
             </div>
 
@@ -403,7 +490,6 @@ export default function AdminDashboardPage() {
             </div>
           </div>
 
-          {/* API Key de Blink */}
           <div className="mt-6 bg-slate-950/60 rounded-xl p-4 border border-slate-800/80">
             <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
               <div className="flex-1">
@@ -443,16 +529,6 @@ export default function AdminDashboardPage() {
               </button>
             </div>
           </div>
-
-          {status && !status.connected && (
-            <div className="mt-6 rounded-xl bg-rose-500/10 border border-rose-500/30 p-4 flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
-              <div className="text-sm">
-                <p className="font-semibold text-rose-200">Error de conexión con Blink API</p>
-                <p className="text-rose-300/90 mt-1">{status.error}</p>
-              </div>
-            </div>
-          )}
 
           {status && status.connected && (
             <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -509,15 +585,196 @@ export default function AdminDashboardPage() {
           )}
         </section>
 
-        {/* 2. Auditoría Completa de Remesas (con vista de PIN y botón de Desbloqueo) */}
+        {/* 2. Cobro con Tarjeta en Wompi El Salvador y Liquidez en Blink Stablesats */}
+        <section className="rounded-2xl border border-amber-500/30 bg-slate-900/70 p-6 shadow-xl space-y-6">
+          <div className="pb-4 border-b border-slate-800">
+            <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+              <Building2 className="h-5 w-5 text-amber-400" />
+              2. Cobro con Tarjeta en Wompi El Salvador (Banco Agrícola) + Liquidez Blink Stablesats
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Cuando Wompi verifique tu cuenta bancaria, pega aquí tu <code>App ID</code> y tu{" "}
+              <code>API Secret</code> para crear enlaces de pago reales (<code>lk.wompi.sv</code>).
+            </p>
+          </div>
+
+          <form onSubmit={handleSaveExchangeConfig} className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="rounded-xl bg-slate-950/80 border border-slate-800 p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-amber-400" />
+                    A. Pasarela de Tarjetas (Wompi El Salvador)
+                  </h3>
+                  {status?.wompiStatus?.connected ? (
+                    <span className="text-[11px] text-emerald-400 font-semibold">
+                      ✓ Wompi OAuth2 Conectado
+                    </span>
+                  ) : status?.hasWompiKeys ? (
+                    <span className="text-[11px] text-rose-400 font-semibold">
+                      ✗ Revisar llaves Wompi
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-amber-300 font-semibold">
+                      Modo Integrado (Esperando llaves Wompi)
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setUsCheckoutMode("wompi")}
+                    className={`p-2.5 rounded-xl text-xs font-semibold border transition ${
+                      usCheckoutMode === "wompi"
+                        ? "bg-amber-500/20 text-amber-200 border-amber-500/40"
+                        : "bg-slate-900 text-slate-400 border-slate-800"
+                    }`}
+                  >
+                    Wompi SV (Principal)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUsCheckoutMode("stripe")}
+                    className={`p-2.5 rounded-xl text-xs font-semibold border transition ${
+                      usCheckoutMode === "stripe"
+                        ? "bg-indigo-500/20 text-indigo-200 border-indigo-500/40"
+                        : "bg-slate-900 text-slate-400 border-slate-800"
+                    }`}
+                  >
+                    Stripe (Opcional)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUsCheckoutMode("direct")}
+                    className={`p-2.5 rounded-xl text-xs font-semibold border transition ${
+                      usCheckoutMode === "direct"
+                        ? "bg-sky-500/20 text-sky-200 border-sky-500/40"
+                        : "bg-slate-900 text-slate-400 border-slate-800"
+                    }`}
+                  >
+                    1-Click Directo
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">
+                      <code className="text-amber-300">WOMPI_APP_ID</code> (Identificador de Aplicación en{" "}
+                      <code>wompi.sv</code>)
+                    </label>
+                    <input
+                      type="text"
+                      value={wompiAppId}
+                      onChange={(e) => setWompiAppId(e.target.value)}
+                      placeholder={
+                        status?.hasWompiKeys
+                          ? "App ID guardado (pega otro para actualizar)"
+                          : "Ej. 8f9d2a1b-..."
+                      }
+                      className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3.5 py-2 text-xs text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">
+                      <code className="text-amber-300">WOMPI_API_SECRET</code> (Secreto de Aplicación en{" "}
+                      <code>wompi.sv</code>)
+                    </label>
+                    <input
+                      type="password"
+                      value={wompiApiSecret}
+                      onChange={(e) => setWompiApiSecret(e.target.value)}
+                      placeholder={
+                        status?.hasWompiKeys
+                          ? "API Secret guardado (pega otro para actualizar)"
+                          : "Pega aquí tu API Secret de Wompi"
+                      }
+                      className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3.5 py-2 text-xs text-white"
+                    />
+                  </div>
+
+                  {status?.wompiStatus?.error && status?.hasWompiKeys && (
+                    <p className="text-[11px] text-rose-300">{status.wompiStatus.error}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-slate-950/80 border border-slate-800 p-5 space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <DollarSign className="h-4 w-4 text-emerald-400" />
+                      B. Liquidez en Blink Stablesats (USD)
+                    </h3>
+                    <span className="text-[11px] text-emerald-400 font-semibold">
+                      ✓ 1:1 en Dólares sin Volatilidad
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    <strong>Flujo recomendado (Chivo → Blink Stablesats):</strong> Cuando recargas desde tu{" "}
+                    <strong>Chivo Wallet</strong> pagando la factura Lightning de la sección 4 (abajo), tus dólares viajan como Bitcoin por Lightning y Blink los guarda directamente como{" "}
+                    <strong className="text-emerald-300">Stablesats (USD)</strong> desde el primer segundo.
+                  </p>
+
+                  <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-3.5 space-y-2">
+                    <p className="text-xs font-semibold text-amber-300 flex items-center gap-1.5">
+                      <ArrowRightLeft className="h-3.5 w-3.5" />
+                      ¿Tienes satoshis en tu billetera BTC de Blink y quieres pasarlos a Stablesats (USD)?
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={convertAmountUsd}
+                        onChange={(e) => setConvertAmountUsd(e.target.value)}
+                        className="w-24 rounded-lg bg-slate-950 border border-slate-700 px-2.5 py-1.5 text-xs text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleConvertBlinkBtcToUsd}
+                        disabled={convertingBtcToUsd}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold px-3.5 py-1.5 text-xs transition"
+                      >
+                        <Zap className="h-3.5 w-3.5" />
+                        {convertingBtcToUsd
+                          ? "Convirtiendo..."
+                          : `Pasar $${Number(convertAmountUsd || 0).toFixed(2)} de BTC → Stablesats USD`}
+                      </button>
+                    </div>
+                    {convertFeedback && (
+                      <p className="text-[11px] text-slate-200 pt-1">{convertFeedback}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={savingExchangeCfg}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-6 py-2.5 text-xs transition"
+                  >
+                    {savingExchangeCfg
+                      ? "Guardando configuración de Wompi..."
+                      : "Guardar Configuración de Wompi El Salvador"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        {/* 3. Auditoría Completa de Remesas */}
         <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-800">
             <div>
               <h2 className="text-lg font-semibold text-white">
-                2. Historial y Auditoría de Remesas ({remittances.length})
+                3. Historial y Auditoría de Remesas ({remittances.length})
               </h2>
               <p className="text-xs text-slate-400">
-                Aquí puedes ver los códigos, PINs de 4 dígitos, estado de liquidación y desbloquear remesas bloqueadas por intentos fallidos.
+                Incluye el rastro completo: Cobro con tarjeta (Wompi), Resguardo en Blink Stablesats, PIN de 4 dígitos y pago final a Chivo Wallet.
               </p>
             </div>
             <button
@@ -540,10 +797,10 @@ export default function AdminDashboardPage() {
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400">
                     <th className="py-2.5 px-3">Código</th>
-                    <th className="py-2.5 px-3">PIN (4 dígitos)</th>
+                    <th className="py-2.5 px-3">PIN</th>
                     <th className="py-2.5 px-3">Remitente → Destinatario</th>
                     <th className="py-2.5 px-3">Monto Neto</th>
-                    <th className="py-2.5 px-3">Modo</th>
+                    <th className="py-2.5 px-3">Pasarela / Fondeo</th>
                     <th className="py-2.5 px-3">Estado / Seguridad</th>
                     <th className="py-2.5 px-3 text-right">Acciones</th>
                   </tr>
@@ -568,7 +825,13 @@ export default function AdminDashboardPage() {
                       <td className="py-3 px-3 font-bold text-emerald-400">
                         ${(rem.netPayoutUsdCents / 100).toFixed(2)} USD
                       </td>
-                      <td className="py-3 px-3 uppercase text-slate-400">{rem.paymentMode}</td>
+                      <td className="py-3 px-3 text-slate-400">
+                        {rem.usPaymentMethod === "WOMPI_CARD"
+                          ? "Wompi SV → Blink Stablesats"
+                          : rem.usPaymentMethod === "STRIPE_CARD"
+                          ? "Stripe → Blink Stablesats"
+                          : "Blink Stablesats"}
+                      </td>
                       <td className="py-3 px-3">
                         {rem.isLocked ? (
                           <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-semibold">
@@ -577,6 +840,10 @@ export default function AdminDashboardPage() {
                         ) : rem.status === "COMPLETED" ? (
                           <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold">
                             PAGADA A CHIVO
+                          </span>
+                        ) : rem.status === "PENDING_PAYMENT" ? (
+                          <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/30 font-semibold">
+                            ESPERANDO PAGO TARJETA
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold">
@@ -610,12 +877,72 @@ export default function AdminDashboardPage() {
           )}
         </section>
 
-        {/* 3. Herramientas Técnicas de Tesorería e Inspector BOLT11 */}
+        {/* 4. Recarga desde Chivo Wallet a Blink Stablesats USD + Inspector BOLT11 */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <section className="rounded-2xl border border-emerald-500/30 bg-slate-900/60 p-6 shadow-xl space-y-4">
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <DollarSign className="h-5 w-5 text-emerald-400" />
+              4. Recargar Liquidez desde Chivo Wallet → Blink Stablesats (USD)
+            </h2>
+            <p className="text-xs text-slate-400">
+              Genera aquí una factura Lightning para pagar desde tu <strong>Chivo Wallet</strong> (con los dólares que te deposita Wompi en tu Banco Agrícola). Al pagarla, entra directo a tu billetera <strong>Stablesats (USD)</strong> con $0.00 de comisión.
+            </p>
+            <form onSubmit={handleCreateUsdInvoice} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={invoiceAmountUsd}
+                  onChange={(e) => setInvoiceAmountUsd(e.target.value)}
+                  className="rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2 text-sm text-white"
+                />
+                <input
+                  type="text"
+                  value={invoiceMemo}
+                  onChange={(e) => setInvoiceMemo(e.target.value)}
+                  className="rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2 text-sm text-white"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={creatingInvoice || !status?.usdWallet?.id}
+                className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-2.5 text-xs transition"
+              >
+                {creatingInvoice
+                  ? "Generando..."
+                  : `Generar Factura Stablesats ($${Number(invoiceAmountUsd || 0).toFixed(2)} USD)`}
+              </button>
+            </form>
+
+            {invoiceError && <p className="text-xs text-rose-300">{invoiceError}</p>}
+
+            {generatedInvoice && (
+              <div className="rounded-xl bg-slate-950 border border-emerald-500/30 p-3 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-emerald-400 font-semibold">
+                    Factura Lista para Pagar desde Chivo Wallet
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => copyText(generatedInvoice.paymentRequest)}
+                    className="inline-flex items-center gap-1 text-xs text-slate-200 bg-slate-800 px-2.5 py-1 rounded-lg"
+                  >
+                    {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                    {copied ? "Copiada" : "Copiar"}
+                  </button>
+                </div>
+                <p className="text-[11px] font-mono text-slate-300 break-all">
+                  {generatedInvoice.paymentRequest}
+                </p>
+              </div>
+            )}
+          </section>
+
           <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl space-y-4">
             <h2 className="text-lg font-semibold text-white flex items-center gap-2">
               <FileCheck2 className="h-5 w-5 text-amber-400" />
-              Inspector Técnico de Facturas BOLT11
+              5. Inspector Técnico de Facturas BOLT11
             </h2>
             <textarea
               rows={3}
@@ -649,63 +976,6 @@ export default function AdminDashboardPage() {
                     {inspectResult.decoded.estimatedUsd?.toFixed(2)} USD)
                   </p>
                 )}
-              </div>
-            )}
-          </section>
-
-          <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl space-y-4">
-            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-              <DollarSign className="h-5 w-5 text-emerald-400" />
-              Recargar Tesorería Stablesats (USD)
-            </h2>
-            <form onSubmit={handleCreateUsdInvoice} className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  value={invoiceAmountUsd}
-                  onChange={(e) => setInvoiceAmountUsd(e.target.value)}
-                  className="rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2 text-sm text-white"
-                />
-                <input
-                  type="text"
-                  value={invoiceMemo}
-                  onChange={(e) => setInvoiceMemo(e.target.value)}
-                  className="rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2 text-sm text-white"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={creatingInvoice || !status?.usdWallet?.id}
-                className="w-full rounded-xl bg-emerald-500 text-slate-950 font-semibold py-2.5 text-xs"
-              >
-                {creatingInvoice
-                  ? "Generando..."
-                  : `Generar Factura de Recarga ($${Number(invoiceAmountUsd || 0).toFixed(2)} USD)`}
-              </button>
-            </form>
-
-            {invoiceError && <p className="text-xs text-rose-300">{invoiceError}</p>}
-
-            {generatedInvoice && (
-              <div className="rounded-xl bg-slate-950 border border-emerald-500/30 p-3 space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-emerald-400 font-semibold">
-                    Factura Lista para Pagar
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => copyText(generatedInvoice.paymentRequest)}
-                    className="inline-flex items-center gap-1 text-xs text-slate-200 bg-slate-800 px-2.5 py-1 rounded-lg"
-                  >
-                    {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                    {copied ? "Copiada" : "Copiar"}
-                  </button>
-                </div>
-                <p className="text-[11px] font-mono text-slate-300 break-all">
-                  {generatedInvoice.paymentRequest}
-                </p>
               </div>
             )}
           </section>

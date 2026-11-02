@@ -20,16 +20,20 @@ RemesasSV abstracts away all Bitcoin complexity to deliver a seamless, 100% USD 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Sender as Sender (USA)
+    actor Sender as Sender (Visa / Mastercard)
     participant App as RemesasSV (Next.js)
+    participant Wompi as Wompi El Salvador (Banco Agrícola)
     participant Blink as Blink Treasury (Stablesats USD)
     actor Recipient as Recipient (El Salvador - Chivo Wallet)
 
-    Sender->>App: Sends USD amount + sets a 4-digit Security PIN
+    Sender->>App: Enters USD amount + sets a 4-digit Security PIN
+    App->>Wompi: Creates real USD payment link (POST /EnlacePago)
+    Sender->>Wompi: Pays with Visa / Mastercard debit or credit card
+    Wompi-->>App: Confirms approved card transaction (OAuth2 API)
     App-->>Sender: Generates Official Receipt (Claim Code SV-XXXX-XXX + PIN)
     Sender->>Recipient: Shares claim link, Claim Code, and 4-digit PIN via WhatsApp
     Recipient->>App: Enters Claim Code + verifies 4-digit PIN
-    Recipient->>Recipient: Opens Chivo Wallet -> Receive -> Bitcoin -> Lightning -> USD
+    Recipient->>Recipient: Opens Chivo Wallet -> Receive -> BTC -> Convert to USD -> Lightning
     Recipient->>App: Pastes BOLT11 Lightning Invoice (lnbc...)
     App->>App: Decodes & validates BOLT11 invoice (Mainnet, expiry, exact USD amount)
     App->>Blink: Executes payout from Stablesats USD Wallet (lnInvoicePaymentSend)
@@ -96,6 +100,10 @@ BLINK_API_URL="https://api.blink.sv/graphql"
 # Your Blink API Key (can also be configured directly via the /admin web panel)
 BLINK_API_KEY=""
 
+# Wompi El Salvador (Banco Agrícola - https://wompi.sv) OAuth2 credentials for Visa/Mastercard checkout
+WOMPI_APP_ID=""
+WOMPI_API_SECRET=""
+
 # Password to access the private admin dashboard at http://localhost:3000/admin
 ADMIN_PASSWORD="admin1234"
 ```
@@ -130,8 +138,10 @@ Open your browser at **[http://localhost:3000](http://localhost:3000)**.
    * Click **Send** to generate your **Claim Code (`SV-XXXX-XXX`)** and digital receipt.
 3. **Claim the Remittance in Chivo Wallet (`/reclamar`):**
    * Open the claim link or visit **[http://localhost:3000/reclamar](http://localhost:3000/reclamar)** and enter the Claim Code and **4-digit PIN**.
-   * On your phone, open **Chivo Wallet** $\rightarrow$ **Receive** $\rightarrow$ **Bitcoin** $\rightarrow$ **Lightning** tab $\rightarrow$ **USD** currency, and enter the exact remittance USD amount.
-   * Copy the generated Lightning invoice (`lnbc...`), paste it into the platform, and click **Receive USD in my Chivo Wallet Now**. Within 3 seconds, the dollars will appear in your Chivo Wallet balance!
+   * On your phone, open **Chivo Wallet**, enter your account PIN, and tap **Recibir** (*Receive*).
+   * Select **BTC**, choose **Convertir a USD** (*Convert to USD*), and tap **Recibir Bitcoin vía Lightning** (*Receive Bitcoin via Lightning*).
+   * Enter the exact remittance USD amount, tap **Solicitar** (*Request*), and tap **Copiar** (*Copy*) below the QR code.
+   * Paste the copied Lightning invoice (`lnbc...`) into the platform and click **Receive USD in my Chivo Wallet Now**. Within 3 seconds, the dollars will appear in your Chivo Wallet balance!
 
 ---
 
