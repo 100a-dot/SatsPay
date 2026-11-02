@@ -25,7 +25,14 @@ export interface RemittanceRecord {
   netPayoutUsdCents: number; // Monto neto exacto que el destinatario recibe en Chivo Wallet (centavos USD)
   status: RemittanceStatus;
   paymentMode: PaymentMode;
-  usPaymentMethod: "STRIPE_CARD" | "ACH_BANK" | "TEST_ZERO_FEE";
+  usPaymentMethod: "WOMPI_CARD" | "STRIPE_CARD" | "ACH_BANK" | "TEST_ZERO_FEE";
+  wompiEnlaceId?: string;
+  wompiTransactionId?: string;
+  stripeSessionId?: string;
+  fundingSource?: "prefunded_blink" | "strike_api";
+  blinkDepositInvoice?: string;
+  strikeQuoteId?: string;
+  strikePaymentId?: string;
   chivoBolt11Invoice?: string;
   decodedInvoiceSats?: number;
   decodedInvoiceUsd?: number;
@@ -38,10 +45,6 @@ export interface RemittanceRecord {
   updatedAt: string;
 }
 
-/**
- * Vista pública segura de una remesa cuando aún NO se ha ingresado el PIN,
- * evitando filtrar nombres o montos a quien solo pruebe un código al azar.
- */
 export interface PublicRemittanceSummary {
   claimCode: string;
   status: RemittanceStatus;
@@ -50,10 +53,6 @@ export interface PublicRemittanceSummary {
   claimedAt?: string;
 }
 
-/**
- * Vista pública para el destinatario una vez que verificó su PIN de 4 dígitos
- * (Sin exponer blinkWalletIdUsed, paymentMode ni datos internos del negocio).
- */
 export interface VerifiedRecipientRemittanceView {
   claimCode: string;
   senderName: string;
@@ -79,7 +78,6 @@ function ensureDataFile(): RemittanceRecord[] {
     const content = readFileSync(DB_FILE, "utf-8");
     const parsed = JSON.parse(content);
     if (!Array.isArray(parsed)) return [];
-    // Retrocompatibilidad con registros creados antes de añadir securityPin
     return (parsed as Partial<RemittanceRecord>[]).map((r) => ({
       ...r,
       securityPin: r.securityPin || "1234",
@@ -160,7 +158,15 @@ export function createRemittance(input: {
   feeUsdCents: number;
   netPayoutUsdCents: number;
   paymentMode: PaymentMode;
-  usPaymentMethod: "STRIPE_CARD" | "ACH_BANK" | "TEST_ZERO_FEE";
+  usPaymentMethod: "WOMPI_CARD" | "STRIPE_CARD" | "ACH_BANK" | "TEST_ZERO_FEE";
+  initialStatus?: RemittanceStatus;
+  fundingSource?: "prefunded_blink" | "strike_api";
+  wompiEnlaceId?: string;
+  wompiTransactionId?: string;
+  stripeSessionId?: string;
+  blinkDepositInvoice?: string;
+  strikeQuoteId?: string;
+  strikePaymentId?: string;
 }): RemittanceRecord {
   const records = ensureDataFile();
   const existingCodes = new Set(records.map((r) => r.claimCode.toUpperCase()));
@@ -178,9 +184,16 @@ export function createRemittance(input: {
     amountSentUsdCents: input.amountSentUsdCents,
     feeUsdCents: input.feeUsdCents,
     netPayoutUsdCents: input.netPayoutUsdCents,
-    status: "READY_TO_CLAIM",
+    status: input.initialStatus || "READY_TO_CLAIM",
     paymentMode: input.paymentMode,
     usPaymentMethod: input.usPaymentMethod,
+    fundingSource: input.fundingSource,
+    wompiEnlaceId: input.wompiEnlaceId,
+    wompiTransactionId: input.wompiTransactionId,
+    stripeSessionId: input.stripeSessionId,
+    blinkDepositInvoice: input.blinkDepositInvoice,
+    strikeQuoteId: input.strikeQuoteId,
+    strikePaymentId: input.strikePaymentId,
     createdAt: now,
     updatedAt: now,
   };

@@ -7,6 +7,8 @@ import path from "path";
  */
 
 export type PaymentMode = "mock" | "production";
+export type CheckoutProviderMode = "wompi" | "stripe" | "direct";
+export type FundingSourceMode = "prefunded_blink" | "strike_api";
 
 export interface BlinkWallet {
   id: string;
@@ -24,6 +26,11 @@ export interface BlinkAccountStatus {
   btcPriceUsd?: number;
   hasConfiguredApiKey?: boolean;
   zeroFeePublicMode?: boolean;
+  usCheckoutMode?: CheckoutProviderMode;
+  hasWompiKeys?: boolean;
+  hasStripeKey?: boolean;
+  fundingSourceMode?: FundingSourceMode;
+  hasStrikeKey?: boolean;
   error?: string;
 }
 
@@ -45,6 +52,12 @@ interface RuntimeConfigFile {
   apiKey?: string;
   adminPassword?: string;
   zeroFeePublicMode?: boolean;
+  usCheckoutMode?: CheckoutProviderMode;
+  wompiAppId?: string;
+  wompiApiSecret?: string;
+  stripeSecretKey?: string;
+  fundingSourceMode?: FundingSourceMode;
+  strikeApiKey?: string;
   updatedAt?: string;
 }
 
@@ -69,6 +82,12 @@ export function saveRuntimeBlinkConfig(config: {
   apiKey?: string;
   adminPassword?: string;
   zeroFeePublicMode?: boolean;
+  usCheckoutMode?: CheckoutProviderMode;
+  wompiAppId?: string;
+  wompiApiSecret?: string;
+  stripeSecretKey?: string;
+  fundingSourceMode?: FundingSourceMode;
+  strikeApiKey?: string;
 }) {
   try {
     if (!existsSync(DATA_DIR)) {
@@ -84,6 +103,22 @@ export function saveRuntimeBlinkConfig(config: {
         config.zeroFeePublicMode !== undefined
           ? config.zeroFeePublicMode
           : current.zeroFeePublicMode,
+      usCheckoutMode: config.usCheckoutMode ?? current.usCheckoutMode,
+      wompiAppId:
+        config.wompiAppId !== undefined ? config.wompiAppId.trim() : current.wompiAppId,
+      wompiApiSecret:
+        config.wompiApiSecret !== undefined
+          ? config.wompiApiSecret.trim()
+          : current.wompiApiSecret,
+      stripeSecretKey:
+        config.stripeSecretKey !== undefined
+          ? config.stripeSecretKey.trim()
+          : current.stripeSecretKey,
+      fundingSourceMode: config.fundingSourceMode ?? current.fundingSourceMode,
+      strikeApiKey:
+        config.strikeApiKey !== undefined
+          ? config.strikeApiKey.trim()
+          : current.strikeApiKey,
       updatedAt: new Date().toISOString(),
     };
     writeFileSync(RUNTIME_CONFIG_PATH, JSON.stringify(updated, null, 2), "utf-8");
@@ -102,7 +137,45 @@ export function getZeroFeePublicMode(): boolean {
   if (runtime.zeroFeePublicMode !== undefined) {
     return runtime.zeroFeePublicMode;
   }
-  return true; // Por defecto sin comisión para facilitar pruebas con micro-montos ($0.10 - $1.00)
+  return true;
+}
+
+export function getUsCheckoutConfig(): {
+  usCheckoutMode: CheckoutProviderMode;
+  wompiAppId: string;
+  wompiApiSecret: string;
+  stripeSecretKey: string;
+  fundingSourceMode: FundingSourceMode;
+  strikeApiKey: string;
+} {
+  const runtime = readRuntimeConfig();
+  const wompiAppId =
+    runtime.wompiAppId?.trim() || process.env.WOMPI_APP_ID?.trim() || "";
+  const wompiApiSecret =
+    runtime.wompiApiSecret?.trim() || process.env.WOMPI_API_SECRET?.trim() || "";
+  const stripeSecretKey =
+    runtime.stripeSecretKey?.trim() || process.env.STRIPE_SECRET_KEY?.trim() || "";
+  const strikeApiKey =
+    runtime.strikeApiKey?.trim() || process.env.STRIKE_API_KEY?.trim() || "";
+
+  // Por defecto usamos Wompi El Salvador (wompi.sv)
+  const savedMode = runtime.usCheckoutMode;
+  const usCheckoutMode: CheckoutProviderMode =
+    savedMode === "wompi" || savedMode === "stripe" || savedMode === "direct"
+      ? savedMode
+      : "wompi";
+
+  const fundingSourceMode: FundingSourceMode =
+    runtime.fundingSourceMode || "prefunded_blink";
+
+  return {
+    usCheckoutMode,
+    wompiAppId,
+    wompiApiSecret,
+    stripeSecretKey,
+    fundingSourceMode,
+    strikeApiKey,
+  };
 }
 
 export function getPaymentMode(overrideMode?: PaymentMode): PaymentMode {
@@ -170,6 +243,15 @@ export async function getBlinkAccountStatus(options?: {
   const mode = getPaymentMode(options?.overrideMode);
   const { apiUrl, apiKey } = getBlinkConfig(options?.overrideApiKey);
   const zeroFeePublicMode = getZeroFeePublicMode();
+  const checkoutCfg = getUsCheckoutConfig();
+  const extraFlags = {
+    zeroFeePublicMode,
+    usCheckoutMode: checkoutCfg.usCheckoutMode,
+    hasWompiKeys: Boolean(checkoutCfg.wompiAppId && checkoutCfg.wompiApiSecret),
+    hasStripeKey: Boolean(checkoutCfg.stripeSecretKey),
+    fundingSourceMode: checkoutCfg.fundingSourceMode,
+    hasStrikeKey: Boolean(checkoutCfg.strikeApiKey),
+  };
 
   if (mode === "mock") {
     if (options?.persistIfValid) {
@@ -192,7 +274,7 @@ export async function getBlinkAccountStatus(options?: {
       },
       btcPriceUsd: 88500.0,
       hasConfiguredApiKey: Boolean(apiKey),
-      zeroFeePublicMode,
+      ...extraFlags,
     };
   }
 
@@ -202,7 +284,7 @@ export async function getBlinkAccountStatus(options?: {
       mode,
       endpoint: apiUrl,
       hasConfiguredApiKey: false,
-      zeroFeePublicMode,
+      ...extraFlags,
       error:
         "Falta BLINK_API_KEY. Pega tu API Key de Blink en el Panel de Administración (/admin) o en tu archivo .env.",
     };
@@ -253,7 +335,7 @@ export async function getBlinkAccountStatus(options?: {
         mode: "production",
         endpoint: apiUrl,
         hasConfiguredApiKey: true,
-        zeroFeePublicMode,
+        ...extraFlags,
         error: result.errors.map((e) => e.message).join("; "),
       };
     }
@@ -265,7 +347,7 @@ export async function getBlinkAccountStatus(options?: {
         mode: "production",
         endpoint: apiUrl,
         hasConfiguredApiKey: true,
-        zeroFeePublicMode,
+        ...extraFlags,
         error:
           "La API Key fue autenticada pero no devolvió 'me.defaultAccount'. Verifica que la API Key tenga el permiso (scope) READ activo.",
       };
@@ -299,7 +381,7 @@ export async function getBlinkAccountStatus(options?: {
       usdWallet,
       btcPriceUsd,
       hasConfiguredApiKey: true,
-      zeroFeePublicMode,
+      ...extraFlags,
     };
   } catch (err) {
     return {
@@ -307,7 +389,7 @@ export async function getBlinkAccountStatus(options?: {
       mode: "production",
       endpoint: apiUrl,
       hasConfiguredApiKey: Boolean(apiKey),
-      zeroFeePublicMode,
+      ...extraFlags,
       error: err instanceof Error ? err.message : "Error desconocido al conectar con Blink API",
     };
   }
@@ -315,7 +397,7 @@ export async function getBlinkAccountStatus(options?: {
 
 /**
  * Crea una factura Lightning denominada en centavos de USD (Stablesats)
- * para recargar nuestra billetera USD de Blink.
+ * para recargar nuestra billetera USD de Blink desde Chivo Wallet o cualquier Lightning Wallet.
  */
 export async function createStablesatsUsdInvoice(params: {
   usdWalletId: string;
@@ -367,7 +449,7 @@ export async function createStablesatsUsdInvoice(params: {
       input: {
         walletId: params.usdWalletId,
         amount: params.amountCents,
-        memo: params.memo || `Recarga Tesorería Remesas ($${(params.amountCents / 100).toFixed(2)} USD)`,
+        memo: params.memo || `Recarga Tesorería Stablesats ($${(params.amountCents / 100).toFixed(2)} USD)`,
       },
     },
     params.overrideApiKey
@@ -387,6 +469,35 @@ export async function createStablesatsUsdInvoice(params: {
   }
 
   return payload.invoice;
+}
+
+/**
+ * Convierte saldo de nuestra propia billetera BTC en Blink hacia nuestra billetera Stablesats (USD)
+ * en caso de que el usuario haya recargado satoshis en su wallet BTC y se necesite completar Stablesats USD.
+ */
+export async function convertBlinkBtcWalletToStablesatsUsd(params: {
+  btcWalletId: string;
+  usdWalletId: string;
+  amountUsdCents: number;
+  memo?: string;
+}): Promise<BlinkPaymentResult> {
+  const mode = getPaymentMode();
+  if (mode === "mock") {
+    return { status: "SUCCESS", errors: [], mode: "mock" };
+  }
+
+  // Generamos una factura Stablesats USD y la pagamos desde nuestra billetera BTC en Blink (intra-ledger $0 fee)
+  const usdInvoice = await createStablesatsUsdInvoice({
+    usdWalletId: params.usdWalletId,
+    amountCents: params.amountUsdCents,
+    memo: params.memo || `Conversión interna BTC -> Stablesats ($${(params.amountUsdCents / 100).toFixed(2)} USD)`,
+  });
+
+  return payLightningInvoiceFromStablesats({
+    usdWalletId: params.btcWalletId, // Se envía desde la billetera BTC hacia la factura de la billetera USD
+    paymentRequest: usdInvoice.paymentRequest,
+    memo: params.memo || "Conversión interna BTC -> Stablesats USD",
+  });
 }
 
 /**
