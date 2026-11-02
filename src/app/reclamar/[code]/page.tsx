@@ -356,26 +356,30 @@ export default function ReclamarCodigoPage({
                 <Smartphone className="h-4 w-4 text-amber-400" />
                 Sigue estos 4 pasos en tu Chivo Wallet:
               </h2>
-              <ol className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-300">
-                <li className="bg-slate-900/90 p-3 rounded-lg border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-0.5">1. Abre Chivo Wallet</strong>
-                  Presiona el botón <strong>Recibir</strong> y selecciona <strong>Bitcoin</strong>.
-                </li>
-                <li className="bg-slate-900/90 p-3 rounded-lg border border-amber-500/30">
-                  <strong className="text-amber-400 block mb-0.5">
-                    2. Elige la pestaña &ldquo;Lightning&rdquo; ⚡
+              <ol className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-300 leading-relaxed">
+                <li className="bg-slate-900/90 p-3.5 rounded-lg border border-slate-800/80">
+                  <strong className="text-amber-400 block mb-1">
+                    1. Abre Chivo Wallet y toca &ldquo;Recibir&rdquo;
                   </strong>
-                  Selecciona <strong>Lightning</strong> en la parte superior para recibir el pago al instante.
+                  Abre tu app <strong>Chivo Wallet</strong>, introduce el PIN de tu cuenta y una vez adentro haz clic en el botón que dice <strong>Recibir</strong>.
                 </li>
-                <li className="bg-slate-900/90 p-3 rounded-lg border border-emerald-500/30">
-                  <strong className="text-emerald-400 block mb-0.5">
-                    3. Elige recibir en USD y pon ${exactUsdString}
+                <li className="bg-slate-900/90 p-3.5 rounded-lg border border-amber-500/30">
+                  <strong className="text-amber-400 block mb-1">
+                    2. Elige &ldquo;BTC&rdquo; y &ldquo;Convertir a USD&rdquo;
                   </strong>
-                  Escribe exactamente <strong>${exactUsdString} USD</strong> para que se acredite en dólares en tu cuenta.
+                  En esa ventana selecciona la opción <strong>BTC</strong>, luego selecciona <strong>Convertir a USD</strong> y haz clic donde dice <strong>Recibir Bitcoin vía Lightning</strong>.
                 </li>
-                <li className="bg-slate-900/90 p-3 rounded-lg border border-slate-800/80">
-                  <strong className="text-amber-400 block mb-0.5">4. Copia y pega la factura</strong>
-                  Copia el código generado (empieza con <code className="text-amber-300">lnbc...</code>) y pégalo aquí abajo.
+                <li className="bg-slate-900/90 p-3.5 rounded-lg border border-emerald-500/30">
+                  <strong className="text-emerald-400 block mb-1">
+                    3. Pon ${exactUsdString} y toca &ldquo;Solicitar&rdquo;
+                  </strong>
+                  En la nueva ventana introduce el monto igual a <strong>${exactUsdString}</strong> y una vez introducido haz clic en el botón que dice <strong>Solicitar</strong>.
+                </li>
+                <li className="bg-slate-900/90 p-3.5 rounded-lg border border-slate-800/80">
+                  <strong className="text-amber-400 block mb-1">
+                    4. Toca &ldquo;Copiar&rdquo; debajo del QR y pega aquí
+                  </strong>
+                  Se mostrará una ventana con un código QR y abajo un botón que dice <strong>Copiar</strong>. Haz clic en <strong>Copiar</strong> para copiar el texto de la factura y pégalo aquí abajo.
                 </li>
               </ol>
             </div>

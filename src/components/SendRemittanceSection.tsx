@@ -19,7 +19,7 @@ import {
   Share2,
 } from "lucide-react";
 
-const QUICK_AMOUNTS = ["10.00", "25.00", "50.00", "100.00"];
+const QUICK_AMOUNTS = ["1.00", "10.00", "25.00", "50.00"];
 
 interface CustomerReceipt {
   claimCode: string;
@@ -43,12 +43,62 @@ export default function SendRemittanceSection() {
   const [recipientName, setRecipientName] = useState<string>("");
   const [securityPin, setSecurityPin] = useState<string>("4829");
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [verifyingStripeReturn, setVerifyingStripeReturn] = useState<boolean>(false);
+  const [activeWompiCheckout, setActiveWompiCheckout] = useState<{
+    checkoutUrl: string;
+    sessionId: string;
+    claimCode: string;
+  } | null>(null);
+  const [checkingWompiStatus, setCheckingWompiStatus] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<CustomerReceipt | null>(null);
   const [copiedDetails, setCopiedDetails] = useState<boolean>(false);
 
   useEffect(() => {
     setSecurityPin(generateRandom4DigitPin());
+
+    // Verificar si el usuario viene regresando de pagar con tarjeta en Wompi El Salvador o Stripe
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const stripeSessionId = params.get("stripe_session_id");
+      const wompiReturn = params.get("wompi_return");
+      const wompiTxId = params.get("idTransaccion") || undefined;
+      const localSessionId = params.get("session_id") || undefined;
+      const code =
+        params.get("code") ||
+        params.get("identificadorEnlaceComercio") ||
+        "";
+      const canceled = params.get("canceled");
+
+      if (canceled) {
+        setError("El pago con tarjeta fue cancelado. No se realizó ningún cargo.");
+      } else if ((wompiReturn || stripeSessionId || wompiTxId) && code) {
+        setVerifyingStripeReturn(true);
+        fetch("/api/checkout/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: stripeSessionId || localSessionId || wompiTxId || "wompi_redirect",
+            wompiTransactionId: wompiTxId,
+            claimCode: code,
+          }),
+        })
+          .then(async (res) => {
+            const data = await res.json();
+            if (!res.ok || data.error) {
+              setError(data.error || "No se pudo verificar el pago con tarjeta.");
+            } else if (data.receipt) {
+              setReceipt(data.receipt);
+              window.history.replaceState({}, "", window.location.pathname);
+            }
+          })
+          .catch(() =>
+            setError("Error de red al confirmar tu pago con tarjeta.")
+          )
+          .finally(() => setVerifyingStripeReturn(false));
+      }
+    }
+
     fetch("/api/remittances")
       .then((r) => r.json())
       .then((data) => {
@@ -87,12 +137,26 @@ export default function SendRemittanceSection() {
       const data = await res.json();
       if (!res.ok || data.error) {
         setError(data.error || "No se pudo procesar el envío.");
+        setSubmitting(false);
+      } else if (data.requiresStripeRedirect && data.checkoutUrl) {
+        if (String(data.checkoutUrl).includes("wompi.sv")) {
+          // Abrir el enlace oficial de Wompi en pestaña nueva y monitorear su aprobación en vivo desde localhost
+          setActiveWompiCheckout({
+            checkoutUrl: data.checkoutUrl,
+            sessionId: data.sessionId,
+            claimCode: data.claimCode,
+          });
+          setSubmitting(false);
+          window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
+        } else {
+          window.location.href = data.checkoutUrl;
+        }
       } else {
         setReceipt(data.receipt);
+        setSubmitting(false);
       }
     } catch {
       setError("Error de conexión al procesar tu envío. Intenta nuevamente.");
-    } finally {
       setSubmitting(false);
     }
   }
@@ -120,6 +184,137 @@ export default function SendRemittanceSection() {
     window.open(`https://wa.me/?text=${text}`, "_blank", "noopener,noreferrer");
   }
 
+  useEffect(() => {
+    if (!activeWompiCheckout || receipt) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/checkout/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: activeWompiCheckout.sessionId,
+            claimCode: activeWompiCheckout.claimCode,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.receipt) {
+          setReceipt(data.receipt);
+          setActiveWompiCheckout(null);
+          setError(null);
+        }
+      } catch {
+        // Seguir esperando mientras el cliente completa el pago en Wompi
+      }
+    }, 3500);
+
+    return () => clearInterval(interval);
+  }, [activeWompiCheckout, receipt]);
+
+  async function handleManualWompiCheck() {
+    if (!activeWompiCheckout) return;
+    setCheckingWompiStatus(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/checkout/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: activeWompiCheckout.sessionId,
+          claimCode: activeWompiCheckout.claimCode,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.receipt) {
+        setReceipt(data.receipt);
+        setActiveWompiCheckout(null);
+      } else {
+        setError(
+          data.error ||
+            "Aún no aparece completado el pago en Wompi. Completa el pago en la ventana de Wompi e intenta de nuevo."
+        );
+      }
+    } finally {
+      setCheckingWompiStatus(false);
+    }
+  }
+
+  if (activeWompiCheckout && !receipt) {
+    return (
+      <div className="rounded-2xl border border-amber-500/40 bg-slate-900/90 p-8 text-center space-y-5 shadow-2xl">
+        <RefreshCw className="h-10 w-10 text-amber-400 animate-spin mx-auto" />
+        <div className="space-y-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-amber-400">
+            Pasarela Oficial Wompi El Salvador • Orden {activeWompiCheckout.claimCode}
+          </span>
+          <h2 className="text-2xl font-bold text-white">
+            Completa tu pago con tarjeta en la ventana de Wompi
+          </h2>
+          <p className="text-sm text-slate-300 max-w-xl mx-auto">
+            Se abrió tu enlace seguro de pago en <strong>Wompi (Banco Agrícola)</strong>. En cuanto apruebes tu tarjeta, esta pantalla detectará tu pago automáticamente y te mostrará tu recibo y PIN.
+          </p>
+        </div>
+
+        {error && (
+          <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-200 max-w-lg mx-auto">
+            {error}
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          <a
+            href={activeWompiCheckout.checkoutUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-6 py-3.5 text-sm transition"
+          >
+            <CreditCard className="h-4 w-4" />
+            Abrir Enlace de Pago en Wompi
+          </a>
+
+          <button
+            type="button"
+            onClick={handleManualWompiCheck}
+            disabled={checkingWompiStatus}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold px-5 py-3.5 text-sm transition"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            {checkingWompiStatus
+              ? "Verificando con Wompi API..."
+              : "Ya pagué en Wompi • Verificar ahora"}
+          </button>
+        </div>
+
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveWompiCheckout(null);
+              setError(null);
+            }}
+            className="text-xs text-slate-400 hover:text-white underline"
+          >
+            Cancelar y volver al formulario
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (verifyingStripeReturn) {
+    return (
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-10 text-center space-y-4 shadow-2xl">
+        <RefreshCw className="h-10 w-10 text-amber-400 animate-spin mx-auto" />
+        <h2 className="text-xl font-bold text-white">
+          Confirmando tu pago con tarjeta y preparando tu remesa...
+        </h2>
+        <p className="text-sm text-slate-400">
+          Estamos verificando la transacción y habilitando el cobro inmediato en El Salvador.
+        </p>
+      </div>
+    );
+  }
+
   if (receipt) {
     return (
       <div className="rounded-2xl border border-emerald-500/40 bg-slate-900/90 p-6 sm:p-8 shadow-2xl space-y-6">
@@ -129,7 +324,7 @@ export default function SendRemittanceSection() {
           </div>
           <div>
             <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-              Comprobante Oficial de Envío
+              Comprobante Oficial de Envío • Pago Confirmado
             </span>
             <h2 className="text-2xl font-bold text-white mt-0.5">
               ¡Tu remesa de ${(receipt.netPayoutUsdCents / 100).toFixed(2)} USD está lista!
@@ -141,7 +336,6 @@ export default function SendRemittanceSection() {
           </div>
         </div>
 
-        {/* Tarjeta destacada con Código + PIN Secreto */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-950 p-5 rounded-xl border border-slate-800">
           <div>
             <span className="text-xs text-slate-400 block">1. Código de Remesa:</span>
@@ -165,7 +359,6 @@ export default function SendRemittanceSection() {
           </div>
         </div>
 
-        {/* Detalles del recibo */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-slate-950/50 p-4 rounded-xl border border-slate-800/80">
           <div>
             <span className="text-slate-400 block">Enviado por:</span>
@@ -189,7 +382,6 @@ export default function SendRemittanceSection() {
           </div>
         </div>
 
-        {/* Botones de Acción para el Remitente */}
         <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 pt-2 print:hidden">
           <button
             type="button"
@@ -264,7 +456,6 @@ export default function SendRemittanceSection() {
       </div>
 
       <form onSubmit={handleSubmit} className="mt-6 space-y-6">
-        {/* Calculadora de Monto */}
         <div className="rounded-xl bg-slate-950/80 border border-slate-800 p-5 space-y-4">
           <label className="text-sm font-semibold text-white flex items-center gap-1.5">
             <DollarSign className="h-4 w-4 text-emerald-400" />
@@ -307,7 +498,6 @@ export default function SendRemittanceSection() {
             ))}
           </div>
 
-          {/* Resumen de Costos */}
           <div className="pt-4 border-t border-slate-800/90 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
             <div className="bg-slate-900/70 p-3 rounded-xl border border-slate-800">
               <span className="text-slate-400 block">Comisión de envío:</span>
@@ -330,7 +520,6 @@ export default function SendRemittanceSection() {
           </div>
         </div>
 
-        {/* Nombres y PIN de Seguridad de 4 dígitos */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-4 space-y-2">
             <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
@@ -409,13 +598,13 @@ export default function SendRemittanceSection() {
         >
           <CreditCard className="h-5 w-5" />
           {submitting
-            ? "Procesando tu envío..."
-            : `Enviar $${(netCents / 100).toFixed(2)} USD a El Salvador`}
+            ? "Abriendo pasarela segura de pago..."
+            : `Continuar al Pago con Tarjeta ($${(totalChargedCents / 100).toFixed(2)} USD)`}
         </button>
 
         <p className="text-center text-xs text-slate-400 flex items-center justify-center gap-1.5">
           <ShieldCheck className="h-4 w-4 text-emerald-400" />
-          Transacción protegida con código único y PIN secreto de 4 dígitos.
+          Pago seguro con tarjeta Visa / Mastercard • Protegido con PIN de 4 dígitos.
         </p>
       </form>
     </div>
