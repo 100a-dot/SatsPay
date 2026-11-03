@@ -75,18 +75,39 @@ const globalForStore = globalThis as unknown as {
   __satspayRemittancesCache?: RemittanceRecord[];
 };
 
-function isPostgresEnabled(): boolean {
-  const url = (process.env.DATABASE_URL || "").trim();
-  if (!url) return false;
-  if (url.includes("@localhost:5432") || url.includes("@127.0.0.1:5432")) {
-    return false;
+function resolveRemoteDbUrl(): string {
+  const candidates = [
+    process.env.POSTGRES_URL,
+    process.env.PRISMA_DATABASE_URL,
+    process.env.DATABASE_URL,
+    process.env.STORAGE_URL,
+  ];
+  for (const candidate of candidates) {
+    const trimmed = (candidate || "").trim();
+    if (
+      trimmed &&
+      !trimmed.includes("@localhost:5432") &&
+      !trimmed.includes("@127.0.0.1:5432")
+    ) {
+      return trimmed;
+    }
   }
-  return true;
+  return "";
+}
+
+function isPostgresEnabled(): boolean {
+  return Boolean(resolveRemoteDbUrl());
 }
 
 function getPrisma(): PrismaClient {
   if (!globalForStore.__satspayPrisma) {
-    globalForStore.__satspayPrisma = new PrismaClient();
+    const remoteUrl = resolveRemoteDbUrl();
+    if (remoteUrl) {
+      process.env.DATABASE_URL = remoteUrl;
+    }
+    globalForStore.__satspayPrisma = new PrismaClient(
+      remoteUrl ? { datasources: { db: { url: remoteUrl } } } : undefined
+    );
   }
   return globalForStore.__satspayPrisma;
 }
