@@ -77,10 +77,13 @@ const globalForStore = globalThis as unknown as {
 
 function resolveRemoteDbUrl(): string {
   const candidates = [
+    process.env.STORAGE_DATABASE_URL,
+    process.env.STORAGE_POSTGRES_URL,
+    process.env.STORAGE_PRISMA_DATABASE_URL,
+    process.env.STORAGE_URL,
     process.env.POSTGRES_URL,
     process.env.PRISMA_DATABASE_URL,
     process.env.DATABASE_URL,
-    process.env.STORAGE_URL,
   ];
   for (const candidate of candidates) {
     const trimmed = (candidate || "").trim();
