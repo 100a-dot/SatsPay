@@ -216,7 +216,7 @@ export async function POST(req: NextRequest) {
       if (!claimCode) {
         return NextResponse.json({ error: "Falta claimCode" }, { status: 400 });
       }
-      const unlocked = unlockRemittanceByClaimCode(claimCode);
+      const unlocked = await unlockRemittanceByClaimCode(claimCode);
       return NextResponse.json({ remittance: unlocked });
     }
 

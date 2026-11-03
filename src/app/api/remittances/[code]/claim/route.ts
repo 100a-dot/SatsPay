@@ -18,7 +18,7 @@ export async function POST(
   context: { params: Promise<{ code: string }> }
 ) {
   const { code } = await context.params;
-  const existing = getRemittanceByClaimCode(code);
+  const existing = await getRemittanceByClaimCode(code);
 
   if (!existing) {
     return NextResponse.json(
@@ -41,7 +41,7 @@ export async function POST(
       );
     }
 
-    const pinCheck = verifyAndRecordPinAttempt(code, securityPin);
+    const pinCheck = await verifyAndRecordPinAttempt(code, securityPin);
     if (pinCheck.locked) {
       return NextResponse.json(
         {
@@ -145,7 +145,7 @@ export async function POST(
     }
 
     // Marcar como PROCESSING_PAYOUT
-    updateRemittanceByClaimCode(remittance.claimCode, {
+    await updateRemittanceByClaimCode(remittance.claimCode, {
       status: "PROCESSING_PAYOUT",
       chivoBolt11Invoice: bolt11Invoice.trim(),
       decodedInvoiceSats: decoded.satoshis,
@@ -213,7 +213,7 @@ export async function POST(
       paymentResult.status === "ALREADY_PAID" ||
       paymentResult.status === "PENDING"
     ) {
-      const completed = updateRemittanceByClaimCode(remittance.claimCode, {
+      const completed = await updateRemittanceByClaimCode(remittance.claimCode, {
         status: "COMPLETED",
         paymentMode: paymentResult.mode,
         blinkTransactionRef: `${paymentResult.status}_${Date.now()}`,
@@ -231,7 +231,7 @@ export async function POST(
         paymentResult.errors.map((e) => e.message).join("; ") ||
         "La red rechazó el pago de la factura.";
 
-      updateRemittanceByClaimCode(remittance.claimCode, {
+      await updateRemittanceByClaimCode(remittance.claimCode, {
         status: "READY_TO_CLAIM",
         failureReason: internalErrMsg,
       });
@@ -246,7 +246,7 @@ export async function POST(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Error inesperado";
-    updateRemittanceByClaimCode(existing.claimCode, {
+    await updateRemittanceByClaimCode(existing.claimCode, {
       status: "READY_TO_CLAIM",
       failureReason: msg,
     });

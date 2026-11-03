@@ -1,3 +1,4 @@
+import { PrismaClient } from "@prisma/client";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
@@ -70,8 +71,93 @@ const DATA_DIR = process.env.VERCEL
 const DB_FILE = path.join(DATA_DIR, "remittances.json");
 
 const globalForStore = globalThis as unknown as {
+  __satspayPrisma?: PrismaClient;
   __satspayRemittancesCache?: RemittanceRecord[];
 };
+
+function isPostgresEnabled(): boolean {
+  const url = (process.env.DATABASE_URL || "").trim();
+  if (!url) return false;
+  if (url.includes("@localhost:5432") || url.includes("@127.0.0.1:5432")) {
+    return false;
+  }
+  return true;
+}
+
+function getPrisma(): PrismaClient {
+  if (!globalForStore.__satspayPrisma) {
+    globalForStore.__satspayPrisma = new PrismaClient();
+  }
+  return globalForStore.__satspayPrisma;
+}
+
+function mapPrismaRowToRecord(row: {
+  id: string;
+  claimCode: string;
+  securityPin: string;
+  failedPinAttempts: number;
+  isLocked: boolean;
+  senderName: string;
+  recipientName: string;
+  amountSentUsdCents: number;
+  feeUsdCents: number;
+  netPayoutUsdCents: number;
+  status: string;
+  paymentMode: string;
+  usPaymentMethod: string;
+  wompiEnlaceId: string | null;
+  wompiTransactionId: string | null;
+  stripeSessionId: string | null;
+  fundingSource: string | null;
+  blinkDepositInvoice: string | null;
+  strikeQuoteId: string | null;
+  strikePaymentId: string | null;
+  chivoBolt11Invoice: string | null;
+  decodedInvoiceSats: number | null;
+  decodedInvoiceUsd: number | null;
+  blinkWalletIdUsed: string | null;
+  blinkTransactionRef: string | null;
+  routingFeeUsdCents: number | null;
+  failureReason: string | null;
+  claimedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): RemittanceRecord {
+  return {
+    id: row.id,
+    claimCode: row.claimCode,
+    securityPin: row.securityPin,
+    failedPinAttempts: row.failedPinAttempts,
+    isLocked: row.isLocked,
+    senderName: row.senderName,
+    recipientName: row.recipientName,
+    amountSentUsdCents: row.amountSentUsdCents,
+    feeUsdCents: row.feeUsdCents,
+    netPayoutUsdCents: row.netPayoutUsdCents,
+    status: row.status as RemittanceStatus,
+    paymentMode: (row.paymentMode as PaymentMode) || "production",
+    usPaymentMethod:
+      (row.usPaymentMethod as RemittanceRecord["usPaymentMethod"]) || "WOMPI_CARD",
+    wompiEnlaceId: row.wompiEnlaceId ?? undefined,
+    wompiTransactionId: row.wompiTransactionId ?? undefined,
+    stripeSessionId: row.stripeSessionId ?? undefined,
+    fundingSource:
+      (row.fundingSource as RemittanceRecord["fundingSource"]) ?? undefined,
+    blinkDepositInvoice: row.blinkDepositInvoice ?? undefined,
+    strikeQuoteId: row.strikeQuoteId ?? undefined,
+    strikePaymentId: row.strikePaymentId ?? undefined,
+    chivoBolt11Invoice: row.chivoBolt11Invoice ?? undefined,
+    decodedInvoiceSats: row.decodedInvoiceSats ?? undefined,
+    decodedInvoiceUsd: row.decodedInvoiceUsd ?? undefined,
+    blinkWalletIdUsed: row.blinkWalletIdUsed ?? undefined,
+    blinkTransactionRef: row.blinkTransactionRef ?? undefined,
+    routingFeeUsdCents: row.routingFeeUsdCents ?? undefined,
+    failureReason: row.failureReason ?? undefined,
+    claimedAt: row.claimedAt ? row.claimedAt.toISOString() : undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
 
 function ensureDataFile(): RemittanceRecord[] {
   try {
@@ -128,15 +214,37 @@ function generateClaimCode(existingCodes: Set<string>): string {
   return `SV-${Date.now().toString().slice(-7)}`;
 }
 
-export function listRemittances(): RemittanceRecord[] {
+export async function listRemittances(): Promise<RemittanceRecord[]> {
+  if (isPostgresEnabled()) {
+    try {
+      const rows = await getPrisma().remittance.findMany({
+        orderBy: { createdAt: "desc" },
+      });
+      return rows.map(mapPrismaRowToRecord);
+    } catch (err) {
+      console.error("[Prisma listRemittances fallback]", err);
+    }
+  }
   const records = ensureDataFile();
   return records.sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 }
 
-export function getRemittanceByClaimCode(claimCode: string): RemittanceRecord | null {
+export async function getRemittanceByClaimCode(
+  claimCode: string
+): Promise<RemittanceRecord | null> {
   const normalized = claimCode.trim().toUpperCase();
+  if (isPostgresEnabled()) {
+    try {
+      const row = await getPrisma().remittance.findUnique({
+        where: { claimCode: normalized },
+      });
+      return row ? mapPrismaRowToRecord(row) : null;
+    } catch (err) {
+      console.error("[Prisma getRemittanceByClaimCode fallback]", err);
+    }
+  }
   const records = ensureDataFile();
   return records.find((r) => r.claimCode.toUpperCase() === normalized) || null;
 }
@@ -165,7 +273,7 @@ export function toVerifiedRecipientView(
   };
 }
 
-export function createRemittance(input: {
+export async function createRemittance(input: {
   senderName: string;
   recipientName: string;
   securityPin: string;
@@ -182,7 +290,44 @@ export function createRemittance(input: {
   blinkDepositInvoice?: string;
   strikeQuoteId?: string;
   strikePaymentId?: string;
-}): RemittanceRecord {
+}): Promise<RemittanceRecord> {
+  if (isPostgresEnabled()) {
+    try {
+      const existing = await getPrisma().remittance.findMany({
+        select: { claimCode: true },
+      });
+      const existingCodes = new Set(existing.map((r) => r.claimCode.toUpperCase()));
+      const claimCode = generateClaimCode(existingCodes);
+
+      const created = await getPrisma().remittance.create({
+        data: {
+          claimCode,
+          securityPin: input.securityPin.trim(),
+          failedPinAttempts: 0,
+          isLocked: false,
+          senderName: input.senderName.trim(),
+          recipientName: input.recipientName.trim(),
+          amountSentUsdCents: input.amountSentUsdCents,
+          feeUsdCents: input.feeUsdCents,
+          netPayoutUsdCents: input.netPayoutUsdCents,
+          status: input.initialStatus || "READY_TO_CLAIM",
+          paymentMode: input.paymentMode,
+          usPaymentMethod: input.usPaymentMethod,
+          fundingSource: input.fundingSource ?? null,
+          wompiEnlaceId: input.wompiEnlaceId ?? null,
+          wompiTransactionId: input.wompiTransactionId ?? null,
+          stripeSessionId: input.stripeSessionId ?? null,
+          blinkDepositInvoice: input.blinkDepositInvoice ?? null,
+          strikeQuoteId: input.strikeQuoteId ?? null,
+          strikePaymentId: input.strikePaymentId ?? null,
+        },
+      });
+      return mapPrismaRowToRecord(created);
+    } catch (err) {
+      console.error("[Prisma createRemittance fallback]", err);
+    }
+  }
+
   const records = ensureDataFile();
   const existingCodes = new Set(records.map((r) => r.claimCode.toUpperCase()));
   const claimCode = generateClaimCode(existingCodes);
@@ -218,16 +363,73 @@ export function createRemittance(input: {
   return newRecord;
 }
 
-export function verifyAndRecordPinAttempt(
+export async function verifyAndRecordPinAttempt(
   claimCode: string,
   candidatePin: string
-): {
+): Promise<{
   valid: boolean;
   locked: boolean;
   remainingAttempts: number;
   record: RemittanceRecord | null;
-} {
+}> {
   const normalized = claimCode.trim().toUpperCase();
+
+  if (isPostgresEnabled()) {
+    try {
+      const existing = await getPrisma().remittance.findUnique({
+        where: { claimCode: normalized },
+      });
+      if (!existing) {
+        return { valid: false, locked: false, remainingAttempts: 0, record: null };
+      }
+
+      if (existing.isLocked || existing.failedPinAttempts >= MAX_PIN_ATTEMPTS) {
+        const lockedRow = await getPrisma().remittance.update({
+          where: { claimCode: normalized },
+          data: { isLocked: true },
+        });
+        return {
+          valid: false,
+          locked: true,
+          remainingAttempts: 0,
+          record: mapPrismaRowToRecord(lockedRow),
+        };
+      }
+
+      if (existing.securityPin === candidatePin.trim()) {
+        const updatedRow = await getPrisma().remittance.update({
+          where: { claimCode: normalized },
+          data: { failedPinAttempts: 0 },
+        });
+        return {
+          valid: true,
+          locked: false,
+          remainingAttempts: MAX_PIN_ATTEMPTS,
+          record: mapPrismaRowToRecord(updatedRow),
+        };
+      }
+
+      const nextAttempts = existing.failedPinAttempts + 1;
+      const nextLocked = nextAttempts >= MAX_PIN_ATTEMPTS;
+      const failedRow = await getPrisma().remittance.update({
+        where: { claimCode: normalized },
+        data: {
+          failedPinAttempts: nextAttempts,
+          isLocked: nextLocked,
+        },
+      });
+
+      return {
+        valid: false,
+        locked: failedRow.isLocked,
+        remainingAttempts: Math.max(0, MAX_PIN_ATTEMPTS - failedRow.failedPinAttempts),
+        record: mapPrismaRowToRecord(failedRow),
+      };
+    } catch (err) {
+      console.error("[Prisma verifyAndRecordPinAttempt fallback]", err);
+    }
+  }
+
   const records = ensureDataFile();
   const idx = records.findIndex((r) => r.claimCode.toUpperCase() === normalized);
   if (idx === -1) {
@@ -275,18 +477,76 @@ export function verifyAndRecordPinAttempt(
   };
 }
 
-export function unlockRemittanceByClaimCode(claimCode: string): RemittanceRecord | null {
+export async function unlockRemittanceByClaimCode(
+  claimCode: string
+): Promise<RemittanceRecord | null> {
   return updateRemittanceByClaimCode(claimCode, {
     failedPinAttempts: 0,
     isLocked: false,
   });
 }
 
-export function updateRemittanceByClaimCode(
+export async function updateRemittanceByClaimCode(
   claimCode: string,
   patch: Partial<Omit<RemittanceRecord, "id" | "claimCode" | "createdAt">>
-): RemittanceRecord | null {
+): Promise<RemittanceRecord | null> {
   const normalized = claimCode.trim().toUpperCase();
+
+  if (isPostgresEnabled()) {
+    try {
+      const data: Record<string, unknown> = {};
+      if (patch.securityPin !== undefined) data.securityPin = patch.securityPin;
+      if (patch.failedPinAttempts !== undefined)
+        data.failedPinAttempts = patch.failedPinAttempts;
+      if (patch.isLocked !== undefined) data.isLocked = patch.isLocked;
+      if (patch.senderName !== undefined) data.senderName = patch.senderName;
+      if (patch.recipientName !== undefined) data.recipientName = patch.recipientName;
+      if (patch.amountSentUsdCents !== undefined)
+        data.amountSentUsdCents = patch.amountSentUsdCents;
+      if (patch.feeUsdCents !== undefined) data.feeUsdCents = patch.feeUsdCents;
+      if (patch.netPayoutUsdCents !== undefined)
+        data.netPayoutUsdCents = patch.netPayoutUsdCents;
+      if (patch.status !== undefined) data.status = patch.status;
+      if (patch.paymentMode !== undefined) data.paymentMode = patch.paymentMode;
+      if (patch.usPaymentMethod !== undefined)
+        data.usPaymentMethod = patch.usPaymentMethod;
+      if ("wompiEnlaceId" in patch) data.wompiEnlaceId = patch.wompiEnlaceId ?? null;
+      if ("wompiTransactionId" in patch)
+        data.wompiTransactionId = patch.wompiTransactionId ?? null;
+      if ("stripeSessionId" in patch)
+        data.stripeSessionId = patch.stripeSessionId ?? null;
+      if ("fundingSource" in patch) data.fundingSource = patch.fundingSource ?? null;
+      if ("blinkDepositInvoice" in patch)
+        data.blinkDepositInvoice = patch.blinkDepositInvoice ?? null;
+      if ("strikeQuoteId" in patch) data.strikeQuoteId = patch.strikeQuoteId ?? null;
+      if ("strikePaymentId" in patch)
+        data.strikePaymentId = patch.strikePaymentId ?? null;
+      if ("chivoBolt11Invoice" in patch)
+        data.chivoBolt11Invoice = patch.chivoBolt11Invoice ?? null;
+      if ("decodedInvoiceSats" in patch)
+        data.decodedInvoiceSats = patch.decodedInvoiceSats ?? null;
+      if ("decodedInvoiceUsd" in patch)
+        data.decodedInvoiceUsd = patch.decodedInvoiceUsd ?? null;
+      if ("blinkWalletIdUsed" in patch)
+        data.blinkWalletIdUsed = patch.blinkWalletIdUsed ?? null;
+      if ("blinkTransactionRef" in patch)
+        data.blinkTransactionRef = patch.blinkTransactionRef ?? null;
+      if ("routingFeeUsdCents" in patch)
+        data.routingFeeUsdCents = patch.routingFeeUsdCents ?? null;
+      if ("failureReason" in patch) data.failureReason = patch.failureReason ?? null;
+      if ("claimedAt" in patch)
+        data.claimedAt = patch.claimedAt ? new Date(patch.claimedAt) : null;
+
+      const updated = await getPrisma().remittance.update({
+        where: { claimCode: normalized },
+        data,
+      });
+      return mapPrismaRowToRecord(updated);
+    } catch (err) {
+      console.error("[Prisma updateRemittanceByClaimCode fallback]", err);
+    }
+  }
+
   const records = ensureDataFile();
   const idx = records.findIndex((r) => r.claimCode.toUpperCase() === normalized);
   if (idx === -1) return null;

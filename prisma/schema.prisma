@@ -19,18 +19,32 @@ enum RemittanceStatus {
 model Remittance {
   id                  String           @id @default(cuid())
   claimCode           String           @unique
+  securityPin         String           @default("1234")
+  failedPinAttempts   Int              @default(0)
+  isLocked            Boolean          @default(false)
   senderName          String
-  senderEmail         String
+  senderEmail         String?
   recipientName       String
   recipientPhone      String?
   amountSentUsdCents  Int              // Monto cobrado al remitente en centavos USD (ej. 5000 = $50.00)
   feeUsdCents         Int              // Comisión de plataforma en centavos USD
   netPayoutUsdCents   Int              // Monto neto que recibe el destinatario en Chivo Wallet (en centavos USD)
   status              RemittanceStatus @default(PENDING_PAYMENT)
-  paymentMode         String           @default("mock") // "mock" | "production"
+  paymentMode         String           @default("production") // "mock" | "production"
+  usPaymentMethod     String           @default("WOMPI_CARD") // "WOMPI_CARD" | "STRIPE_CARD" | "ACH_BANK" | "TEST_ZERO_FEE"
+  wompiEnlaceId       String?
+  wompiTransactionId  String?
+  stripeSessionId     String?
+  fundingSource       String?
+  blinkDepositInvoice String?
+  strikeQuoteId       String?
+  strikePaymentId     String?
   chivoBolt11Invoice  String?          // Factura Lightning (lnbc...) pegada por el destinatario
+  decodedInvoiceSats  Int?
+  decodedInvoiceUsd   Float?
   blinkWalletIdUsed   String?          // ID de la billetera Stablesats USD usada
   blinkTransactionRef String?          // Estado o referencia devuelta por Blink
+  routingFeeUsdCents  Int?
   failureReason       String?
   claimedAt           DateTime?
   createdAt           DateTime         @default(now())

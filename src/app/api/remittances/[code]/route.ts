@@ -16,7 +16,7 @@ export async function GET(
   context: { params: Promise<{ code: string }> }
 ) {
   const { code } = await context.params;
-  const remittance = getRemittanceByClaimCode(code);
+  const remittance = await getRemittanceByClaimCode(code);
 
   if (!remittance) {
     return NextResponse.json(
@@ -39,7 +39,7 @@ export async function POST(
   context: { params: Promise<{ code: string }> }
 ) {
   const { code } = await context.params;
-  const remittance = getRemittanceByClaimCode(code);
+  const remittance = await getRemittanceByClaimCode(code);
 
   if (!remittance) {
     return NextResponse.json(
@@ -59,7 +59,7 @@ export async function POST(
       );
     }
 
-    const verification = verifyAndRecordPinAttempt(code, securityPin);
+    const verification = await verifyAndRecordPinAttempt(code, securityPin);
 
     if (verification.locked) {
       return NextResponse.json(

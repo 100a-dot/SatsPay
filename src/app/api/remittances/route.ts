@@ -28,7 +28,7 @@ export async function GET() {
     });
   }
 
-  const remittances = listRemittances();
+  const remittances = await listRemittances();
   const stats = {
     totalCount: remittances.length,
     completedCount: remittances.filter((r) => r.status === "COMPLETED").length,
@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
 
     // CASO 1: Cobro con Tarjeta vía Wompi El Salvador (Banco Agrícola) - Opción Principal
     if (checkoutCfg.usCheckoutMode === "wompi") {
-      const pendingRemittance = createRemittance({
+      const pendingRemittance = await createRemittance({
         senderName,
         recipientName,
         securityPin: cleanedPin,
@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
           originUrl,
         });
 
-        updateRemittanceByClaimCode(pendingRemittance.claimCode, {
+        await updateRemittanceByClaimCode(pendingRemittance.claimCode, {
           wompiEnlaceId: wompiLink.enlaceId,
         });
 
@@ -169,7 +169,7 @@ export async function POST(req: NextRequest) {
       // Mientras la cuenta bancaria de Wompi está en verificación (sin llaves configuradas),
       // abrimos la pasarela Wompi integrada en /checkout/[code]
       const localWompiId = `wompi_local_${Date.now()}`;
-      updateRemittanceByClaimCode(pendingRemittance.claimCode, {
+      await updateRemittanceByClaimCode(pendingRemittance.claimCode, {
         wompiEnlaceId: localWompiId,
       });
 
@@ -195,7 +195,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const pendingRemittance = createRemittance({
+      const pendingRemittance = await createRemittance({
         senderName,
         recipientName,
         securityPin: cleanedPin,
@@ -219,7 +219,7 @@ export async function POST(req: NextRequest) {
           originUrl,
         });
 
-        updateRemittanceByClaimCode(pendingRemittance.claimCode, {
+        await updateRemittanceByClaimCode(pendingRemittance.claimCode, {
           stripeSessionId: stripeSession.sessionId,
         });
 
@@ -232,7 +232,7 @@ export async function POST(req: NextRequest) {
       }
 
       const localSessionId = `cs_local_${Date.now()}`;
-      updateRemittanceByClaimCode(pendingRemittance.claimCode, {
+      await updateRemittanceByClaimCode(pendingRemittance.claimCode, {
         stripeSessionId: localSessionId,
       });
 
@@ -251,7 +251,7 @@ export async function POST(req: NextRequest) {
     let strikeQuoteId: string | undefined;
     let strikePaymentId: string | undefined;
 
-    const remittance = createRemittance({
+    const remittance = await createRemittance({
       senderName,
       recipientName,
       securityPin: cleanedPin,
@@ -275,7 +275,7 @@ export async function POST(req: NextRequest) {
       });
 
       if (!bridgeResult.success) {
-        updateRemittanceByClaimCode(remittance.claimCode, {
+        await updateRemittanceByClaimCode(remittance.claimCode, {
           status: "FAILED",
           failureReason: bridgeResult.error,
         });
@@ -293,12 +293,12 @@ export async function POST(req: NextRequest) {
     }
 
     const readyRemittance =
-      updateRemittanceByClaimCode(remittance.claimCode, {
+      (await updateRemittanceByClaimCode(remittance.claimCode, {
         status: "READY_TO_CLAIM",
         blinkDepositInvoice,
         strikeQuoteId,
         strikePaymentId,
-      }) || remittance;
+      })) || remittance;
 
     return NextResponse.json({
       receipt: {

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node --use-system-ca ./node_modules/next/dist/bin/next dev",
-    "build": "next build",
+    "build": "node scripts/prepare-db.mjs && next build",
     "start": "next start",
     "lint": "next lint",
     "blink:check": "node --env-file=.env --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/check-blink.ts",

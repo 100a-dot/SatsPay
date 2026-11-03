@@ -16,7 +16,7 @@ import {
 
 export async function GET(req: NextRequest) {
   const claimCode = req.nextUrl.searchParams.get("code") || "";
-  const remittance = getRemittanceByClaimCode(claimCode);
+  const remittance = await getRemittanceByClaimCode(claimCode);
 
   if (!remittance) {
     return NextResponse.json(
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const remittance = getRemittanceByClaimCode(claimCode);
+    const remittance = await getRemittanceByClaimCode(claimCode);
     if (!remittance) {
       return NextResponse.json(
         { error: "No se encontró la orden de remesa asociada al pago." },
@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
       });
 
       if (!bridgeResult.success) {
-        updateRemittanceByClaimCode(remittance.claimCode, {
+        await updateRemittanceByClaimCode(remittance.claimCode, {
           failureReason: `Pago con tarjeta recibido, pero falló fondeo automático desde Strike: ${bridgeResult.error}`,
         });
         return NextResponse.json(
@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
       strikePaymentId = bridgeResult.strikePaymentId;
     }
 
-    const updated = updateRemittanceByClaimCode(remittance.claimCode, {
+    const updated = await updateRemittanceByClaimCode(remittance.claimCode, {
       status: "READY_TO_CLAIM",
       wompiTransactionId: resolvedWompiTxId || effectiveSessionId,
       stripeSessionId:
