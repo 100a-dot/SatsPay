@@ -63,7 +63,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const storedSessionId =
+      remittance.wompiEnlaceId || remittance.stripeSessionId || "";
+
     if (remittance.status !== "PENDING_PAYMENT") {
+      // Proteger el securityPin: solo devolver el recibo si el cliente presenta el sessionId o idTransaccion legítimo de la sesión
+      const isAuthorizedSessionCaller =
+        (sessionId && storedSessionId && String(sessionId) === String(storedSessionId)) ||
+        (wompiTransactionId &&
+          remittance.wompiTransactionId &&
+          String(wompiTransactionId) === String(remittance.wompiTransactionId));
+
+      if (!isAuthorizedSessionCaller) {
+        return NextResponse.json(
+          { error: "Esta orden ya fue procesada anteriormente." },
+          { status: 403 }
+        );
+      }
+
       return NextResponse.json({
         receipt: {
           claimCode: remittance.claimCode,
@@ -79,33 +96,44 @@ export async function POST(req: NextRequest) {
     }
 
     const checkoutCfg = getUsCheckoutConfig();
-    const effectiveSessionId = sessionId || remittance.wompiEnlaceId || remittance.stripeSessionId || "";
-    const isLocalInteractiveSession =
-      effectiveSessionId.startsWith("cs_local_") ||
-      effectiveSessionId.startsWith("wompi_local_");
+    const hasProductionWompiKeys = Boolean(
+      checkoutCfg.wompiAppId && checkoutCfg.wompiApiSecret
+    );
+    const hasProductionStripeKey = Boolean(checkoutCfg.stripeSecretKey);
+
+    // SEGURIDAD: Solo permitir sesión interactiva local si el ID guardado por el servidor (NUNCA el del cliente)
+    // es local Y las llaves de producción del proveedor no están activas.
+    const isServerCreatedLocalSession =
+      (storedSessionId.startsWith("wompi_local_") && !hasProductionWompiKeys) ||
+      (storedSessionId.startsWith("cs_local_") && !hasProductionStripeKey);
 
     let resolvedWompiTxId = wompiTransactionId;
 
-    if (!isLocalInteractiveSession) {
+    if (!isServerCreatedLocalSession) {
       if (remittance.usPaymentMethod === "WOMPI_CARD") {
-        if (checkoutCfg.wompiAppId && checkoutCfg.wompiApiSecret) {
-          const wompiVerification = await verifyWompiPaymentPaid({
-            wompiAppId: checkoutCfg.wompiAppId,
-            wompiApiSecret: checkoutCfg.wompiApiSecret,
-            enlaceId: remittance.wompiEnlaceId || effectiveSessionId,
-            idTransaccion: wompiTransactionId,
-          });
-
-          if (!wompiVerification.paid) {
-            return NextResponse.json(
-              { error: "El pago en Wompi El Salvador aún no figura como aprobado." },
-              { status: 400 }
-            );
-          }
-          resolvedWompiTxId = wompiVerification.transactionId;
+        if (!hasProductionWompiKeys || !remittance.wompiEnlaceId) {
+          return NextResponse.json(
+            { error: "Configuración de verificación Wompi incompleta en el servidor." },
+            { status: 500 }
+          );
         }
+
+        const wompiVerification = await verifyWompiPaymentPaid({
+          wompiAppId: checkoutCfg.wompiAppId,
+          wompiApiSecret: checkoutCfg.wompiApiSecret,
+          enlaceId: remittance.wompiEnlaceId,
+          idTransaccion: wompiTransactionId,
+        });
+
+        if (!wompiVerification.paid) {
+          return NextResponse.json(
+            { error: "El pago en Wompi El Salvador aún no figura como aprobado." },
+            { status: 400 }
+          );
+        }
+        resolvedWompiTxId = wompiVerification.transactionId;
       } else if (remittance.usPaymentMethod === "STRIPE_CARD") {
-        if (!checkoutCfg.stripeSecretKey) {
+        if (!hasProductionStripeKey || !remittance.stripeSessionId) {
           return NextResponse.json(
             { error: "Falta configuración de Stripe en el servidor." },
             { status: 500 }
@@ -114,7 +142,7 @@ export async function POST(req: NextRequest) {
 
         const verification = await verifyStripeCheckoutSessionPaid({
           stripeSecretKey: checkoutCfg.stripeSecretKey,
-          sessionId: effectiveSessionId,
+          sessionId: remittance.stripeSessionId,
         });
 
         if (!verification.paid) {
@@ -130,9 +158,6 @@ export async function POST(req: NextRequest) {
     let strikeQuoteId: string | undefined;
     let strikePaymentId: string | undefined;
 
-    // Si el modo es prefunded_blink y el usuario tiene el saldo en Stablesats USD (recargado desde Chivo),
-    // ya está listo en Stablesats USD. Si por alguna razón recargó en la billetera BTC de Blink y falta en USD,
-    // convertimos automáticamente la diferencia de BTC -> Stablesats USD dentro de Blink ($0 comisión).
     if (checkoutCfg.fundingSourceMode === "prefunded_blink") {
       const blinkStatus = await getBlinkAccountStatus();
       if (
@@ -179,9 +204,11 @@ export async function POST(req: NextRequest) {
 
     const updated = await updateRemittanceByClaimCode(remittance.claimCode, {
       status: "READY_TO_CLAIM",
-      wompiTransactionId: resolvedWompiTxId || effectiveSessionId,
+      wompiTransactionId: resolvedWompiTxId || storedSessionId,
       stripeSessionId:
-        remittance.usPaymentMethod === "STRIPE_CARD" ? effectiveSessionId : remittance.stripeSessionId,
+        remittance.usPaymentMethod === "STRIPE_CARD"
+          ? remittance.stripeSessionId
+          : undefined,
       fundingSource: checkoutCfg.fundingSourceMode,
       blinkDepositInvoice,
       strikeQuoteId,

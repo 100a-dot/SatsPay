@@ -48,6 +48,16 @@ export async function POST(
     );
   }
 
+  if (remittance.status === "PENDING_PAYMENT") {
+    return NextResponse.json(
+      {
+        error:
+          "El pago con tarjeta de esta remesa aún no ha sido confirmado. Completa primero el pago antes de retirarla.",
+      },
+      { status: 402 }
+    );
+  }
+
   try {
     const body = await req.json();
     const { securityPin } = body as { securityPin?: string };

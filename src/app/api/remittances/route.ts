@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     }
 
     const numericAmount = Number(amountUsd);
-    if (!Number.isFinite(numericAmount) || numericAmount < 0.05) {
+    if (!Number.isFinite(numericAmount) || numericAmount < 0.05 || numericAmount > 1000) {
       return NextResponse.json(
         { error: "El monto mínimo de envío es de $0.05 USD." },
         { status: 400 }
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
 
     if (
       checkoutCfg.fundingSourceMode === "prefunded_blink" &&
-      checkoutCfg.usCheckoutMode === "direct"
+      true
     ) {
       const availableUsdCents = blinkStatus.usdWallet?.balance ?? 0;
       const btcSats = blinkStatus.btcWallet?.balance ?? 0;

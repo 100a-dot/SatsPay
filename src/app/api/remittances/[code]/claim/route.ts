@@ -8,17 +8,42 @@ import {
 import { inspectChivoInvoice } from "@/lib/bolt11";
 import {
   getRemittanceByClaimCode,
+  listRemittances,
   toVerifiedRecipientView,
   updateRemittanceByClaimCode,
   verifyAndRecordPinAttempt,
 } from "@/lib/store";
+
+const globalForClaimLock = globalThis as unknown as {
+  __satspayActiveClaims?: Set<string>;
+};
+
+function getActiveClaimsSet(): Set<string> {
+  if (!globalForClaimLock.__satspayActiveClaims) {
+    globalForClaimLock.__satspayActiveClaims = new Set<string>();
+  }
+  return globalForClaimLock.__satspayActiveClaims;
+}
 
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ code: string }> }
 ) {
   const { code } = await context.params;
-  const existing = await getRemittanceByClaimCode(code);
+  const normalizedCode = code.trim().toUpperCase();
+  const activeClaims = getActiveClaimsSet();
+
+  // Bloqueo atómico en memoria contra peticiones simultáneas (Race Condition / Doble Cobro)
+  if (activeClaims.has(normalizedCode)) {
+    return NextResponse.json(
+      {
+        error: "Tu retiro ya se está procesando en este momento. Espera unos segundos.",
+      },
+      { status: 409 }
+    );
+  }
+
+  const existing = await getRemittanceByClaimCode(normalizedCode);
 
   if (!existing) {
     return NextResponse.json(
@@ -26,6 +51,8 @@ export async function POST(
       { status: 404 }
     );
   }
+
+  activeClaims.add(normalizedCode);
 
   try {
     const body = await req.json();
@@ -41,7 +68,7 @@ export async function POST(
       );
     }
 
-    const pinCheck = await verifyAndRecordPinAttempt(code, securityPin);
+    const pinCheck = await verifyAndRecordPinAttempt(normalizedCode, securityPin);
     if (pinCheck.locked) {
       return NextResponse.json(
         {
@@ -82,9 +109,49 @@ export async function POST(
       );
     }
 
+    if (remittance.status === "PENDING_PAYMENT") {
+      return NextResponse.json(
+        {
+          error:
+            "Esta remesa aún está pendiente de pago con tarjeta. El remitente debe completar el pago antes de poder retirarla.",
+        },
+        { status: 402 }
+      );
+    }
+
+    if (remittance.status !== "READY_TO_CLAIM") {
+      return NextResponse.json(
+        {
+          error: "Esta remesa no se encuentra habilitada para retiro.",
+        },
+        { status: 400 }
+      );
+    }
+
     if (!bolt11Invoice?.trim()) {
       return NextResponse.json(
         { error: "Por favor pega la factura generada en tu Chivo Wallet." },
+        { status: 400 }
+      );
+    }
+
+    const cleanedInvoice = bolt11Invoice.trim();
+
+    // Evitar reutilización de una factura Lightning que ya fue pagada en otra orden
+    const allRemittances = await listRemittances();
+    const invoiceAlreadyUsed = allRemittances.some(
+      (r) =>
+        r.claimCode !== remittance.claimCode &&
+        r.chivoBolt11Invoice &&
+        r.chivoBolt11Invoice.toLowerCase() === cleanedInvoice.toLowerCase() &&
+        (r.status === "COMPLETED" || r.status === "PROCESSING_PAYOUT")
+    );
+    if (invoiceAlreadyUsed) {
+      return NextResponse.json(
+        {
+          error:
+            "Esta factura Lightning ya fue utilizada en otro retiro. Genera una factura nueva en tu Chivo Wallet.",
+        },
         { status: 400 }
       );
     }
@@ -101,7 +168,7 @@ export async function POST(
     }
 
     const btcPriceUsd = blinkStatus.btcPriceUsd || 88500;
-    const decoded = inspectChivoInvoice(bolt11Invoice, btcPriceUsd);
+    const decoded = inspectChivoInvoice(cleanedInvoice, btcPriceUsd);
 
     if (!decoded.valid) {
       return NextResponse.json(
@@ -144,10 +211,10 @@ export async function POST(
       );
     }
 
-    // Marcar como PROCESSING_PAYOUT
+    // Marcar como PROCESSING_PAYOUT antes de enviar el pago por la red Lightning
     await updateRemittanceByClaimCode(remittance.claimCode, {
       status: "PROCESSING_PAYOUT",
-      chivoBolt11Invoice: bolt11Invoice.trim(),
+      chivoBolt11Invoice: cleanedInvoice,
       decodedInvoiceSats: decoded.satoshis,
       decodedInvoiceUsd: decoded.estimatedUsd,
       blinkWalletIdUsed: blinkStatus.usdWallet.id,
@@ -158,7 +225,7 @@ export async function POST(
     try {
       const feeProbe = await probeLightningFeeFromUsd({
         usdWalletId: blinkStatus.usdWallet.id,
-        paymentRequest: bolt11Invoice.trim(),
+        paymentRequest: cleanedInvoice,
       });
       routingFeeUsdCents = feeProbe.feeUsdCents;
     } catch {
@@ -167,7 +234,7 @@ export async function POST(
 
     let paymentResult = await payLightningInvoiceFromStablesats({
       usdWalletId: blinkStatus.usdWallet.id,
-      paymentRequest: bolt11Invoice.trim(),
+      paymentRequest: cleanedInvoice,
       memo: `Remesa ${remittance.claimCode} - $${expectedUsd.toFixed(2)} USD`,
     });
 
@@ -189,7 +256,7 @@ export async function POST(
         });
         paymentResult = await payLightningInvoiceFromStablesats({
           usdWalletId: blinkStatus.usdWallet.id,
-          paymentRequest: bolt11Invoice.trim(),
+          paymentRequest: cleanedInvoice,
           memo: `Remesa ${remittance.claimCode} - $${expectedUsd.toFixed(2)} USD`,
         });
       } catch {
@@ -202,7 +269,7 @@ export async function POST(
       ) {
         paymentResult = await payLightningInvoiceFromStablesats({
           usdWalletId: blinkStatus.btcWallet.id,
-          paymentRequest: bolt11Invoice.trim(),
+          paymentRequest: cleanedInvoice,
           memo: `Remesa ${remittance.claimCode} - $${expectedUsd.toFixed(2)} USD`,
         });
       }
@@ -247,12 +314,14 @@ export async function POST(
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Error inesperado";
     await updateRemittanceByClaimCode(existing.claimCode, {
-      status: "READY_TO_CLAIM",
+      status: existing.status === "PENDING_PAYMENT" ? "PENDING_PAYMENT" : "READY_TO_CLAIM",
       failureReason: msg,
     });
     return NextResponse.json(
       { error: "Ocurrió un error al procesar tu retiro. Intenta nuevamente." },
       { status: 500 }
     );
+  } finally {
+    activeClaims.delete(normalizedCode);
   }
 }
