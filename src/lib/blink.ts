@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import os from "os";
 import path from "path";
 
 /**
@@ -62,19 +63,27 @@ interface RuntimeConfigFile {
 }
 
 const DEFAULT_BLINK_URL = "https://api.blink.sv/graphql";
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), "satspay-data")
+  : path.join(process.cwd(), "data");
 const RUNTIME_CONFIG_PATH = path.join(DATA_DIR, "runtime-config.json");
+
+const globalForBlink = globalThis as unknown as {
+  __satspayRuntimeConfig?: RuntimeConfigFile;
+};
 
 function readRuntimeConfig(): RuntimeConfigFile {
   try {
     if (existsSync(RUNTIME_CONFIG_PATH)) {
       const raw = readFileSync(RUNTIME_CONFIG_PATH, "utf-8");
-      return JSON.parse(raw) as RuntimeConfigFile;
+      const parsed = JSON.parse(raw) as RuntimeConfigFile;
+      globalForBlink.__satspayRuntimeConfig = parsed;
+      return parsed;
     }
   } catch {
     // Ignorar errores de lectura
   }
-  return {};
+  return globalForBlink.__satspayRuntimeConfig || {};
 }
 
 export function saveRuntimeBlinkConfig(config: {
@@ -121,6 +130,7 @@ export function saveRuntimeBlinkConfig(config: {
           : current.strikeApiKey,
       updatedAt: new Date().toISOString(),
     };
+    globalForBlink.__satspayRuntimeConfig = updated;
     writeFileSync(RUNTIME_CONFIG_PATH, JSON.stringify(updated, null, 2), "utf-8");
   } catch {
     // Ignorar errores de escritura
@@ -158,7 +168,6 @@ export function getUsCheckoutConfig(): {
   const strikeApiKey =
     runtime.strikeApiKey?.trim() || process.env.STRIKE_API_KEY?.trim() || "";
 
-  // Por defecto usamos Wompi El Salvador (wompi.sv)
   const savedMode = runtime.usCheckoutMode;
   const usCheckoutMode: CheckoutProviderMode =
     savedMode === "wompi" || savedMode === "stripe" || savedMode === "direct"
@@ -182,8 +191,11 @@ export function getPaymentMode(overrideMode?: PaymentMode): PaymentMode {
   if (overrideMode) return overrideMode;
   const runtime = readRuntimeConfig();
   if (runtime.mode) return runtime.mode;
-  const envMode = (process.env.PAYMENT_MODE || "mock").toLowerCase();
-  return envMode === "production" ? "production" : "mock";
+  const envMode = (process.env.PAYMENT_MODE || "").toLowerCase();
+  if (envMode === "production" || envMode === "mock") {
+    return envMode;
+  }
+  return process.env.BLINK_API_KEY?.trim() ? "production" : "mock";
 }
 
 export function getBlinkConfig(overrideApiKey?: string) {
@@ -486,7 +498,6 @@ export async function convertBlinkBtcWalletToStablesatsUsd(params: {
     return { status: "SUCCESS", errors: [], mode: "mock" };
   }
 
-  // Generamos una factura Stablesats USD y la pagamos desde nuestra billetera BTC en Blink (intra-ledger $0 fee)
   const usdInvoice = await createStablesatsUsdInvoice({
     usdWalletId: params.usdWalletId,
     amountCents: params.amountUsdCents,
@@ -494,7 +505,7 @@ export async function convertBlinkBtcWalletToStablesatsUsd(params: {
   });
 
   return payLightningInvoiceFromStablesats({
-    usdWalletId: params.btcWalletId, // Se envía desde la billetera BTC hacia la factura de la billetera USD
+    usdWalletId: params.btcWalletId,
     paymentRequest: usdInvoice.paymentRequest,
     memo: params.memo || "Conversión interna BTC -> Stablesats USD",
   });

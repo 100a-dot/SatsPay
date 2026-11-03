@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import os from "os";
 import path from "path";
 import type { PaymentMode } from "./blink";
 
@@ -20,7 +21,7 @@ export interface RemittanceRecord {
   isLocked: boolean; // Bloqueado tras 5 intentos fallidos
   senderName: string;
   recipientName: string;
-  amountSentUsdCents: number; // Total cobrado al remitente en EE.UU. (centavos)
+  amountSentUsdCents: number; // Total cobrado al remitente (centavos)
   feeUsdCents: number; // Comisión de la plataforma (centavos)
   netPayoutUsdCents: number; // Monto neto exacto que el destinatario recibe en Chivo Wallet (centavos USD)
   status: RemittanceStatus;
@@ -63,8 +64,14 @@ export interface VerifiedRecipientRemittanceView {
   createdAt: string;
 }
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), "satspay-data")
+  : path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "remittances.json");
+
+const globalForStore = globalThis as unknown as {
+  __satspayRemittancesCache?: RemittanceRecord[];
+};
 
 function ensureDataFile(): RemittanceRecord[] {
   try {
@@ -72,28 +79,36 @@ function ensureDataFile(): RemittanceRecord[] {
       mkdirSync(DATA_DIR, { recursive: true });
     }
     if (!existsSync(DB_FILE)) {
-      writeFileSync(DB_FILE, JSON.stringify([], null, 2), "utf-8");
-      return [];
+      const initial = globalForStore.__satspayRemittancesCache || [];
+      writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf-8");
+      return initial;
     }
     const content = readFileSync(DB_FILE, "utf-8");
     const parsed = JSON.parse(content);
-    if (!Array.isArray(parsed)) return [];
-    return (parsed as Partial<RemittanceRecord>[]).map((r) => ({
+    if (!Array.isArray(parsed)) return globalForStore.__satspayRemittancesCache || [];
+    const normalized = (parsed as Partial<RemittanceRecord>[]).map((r) => ({
       ...r,
       securityPin: r.securityPin || "1234",
       failedPinAttempts: r.failedPinAttempts ?? 0,
       isLocked: r.isLocked ?? false,
     })) as RemittanceRecord[];
+    globalForStore.__satspayRemittancesCache = normalized;
+    return normalized;
   } catch {
-    return [];
+    return globalForStore.__satspayRemittancesCache || [];
   }
 }
 
 function saveDataFile(records: RemittanceRecord[]) {
-  if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true });
+  globalForStore.__satspayRemittancesCache = records;
+  try {
+    if (!existsSync(DATA_DIR)) {
+      mkdirSync(DATA_DIR, { recursive: true });
+    }
+    writeFileSync(DB_FILE, JSON.stringify(records, null, 2), "utf-8");
+  } catch {
+    // Fallback en memoria si el filesystem temporal no está disponible
   }
-  writeFileSync(DB_FILE, JSON.stringify(records, null, 2), "utf-8");
 }
 
 function generateClaimCode(existingCodes: Set<string>): string {
